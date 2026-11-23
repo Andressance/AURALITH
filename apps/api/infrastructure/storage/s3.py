@@ -71,8 +71,11 @@ class S3StorageProvider:
         )
         return key
 
-    def open(self, key: str):
-        response = self.client.get_object(Bucket=self.bucket, Key=key)
+    def open(self, key: str, start: int | None = None, end: int | None = None):
+        kwargs = {"Bucket": self.bucket, "Key": key}
+        if start is not None and end is not None:
+            kwargs["Range"] = f"bytes={start}-{end}"
+        response = self.client.get_object(**kwargs)
         return response["Body"]
 
     def delete(self, key: str) -> None:

@@ -21,10 +21,19 @@
   let selectedPlaylistId = null;
   let selectedPlaylist = null;
   let sessionToken = localStorage.getItem("auralith_session_token") || "";
+  let profile = null;
+  let showProfile = false;
+  let profileName = "";
+  let profileUsername = "";
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function text(value, fallback = "") {
     return typeof value === "string" ? value : fallback;
+  }
+
+  function streamUrl(track) {
+    const token = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
+    return `${API_BASE}/api/tracks/${track.id}/stream${token}`;
   }
 
   function titleInitial(title) {
@@ -80,7 +89,9 @@
   }
 
   async function load() {
-    await api("/api/me");
+    profile = await api("/api/me");
+    profileName = profile.display_name || profile.username;
+    profileUsername = profile.username;
     authenticated = true;
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
   }
@@ -206,6 +217,48 @@
     authenticated = false;
   }
 
+  async function saveProfile(event) {
+    event.preventDefault();
+    try {
+      profile = await api("/api/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: profileUsername, display_name: profileName })
+      });
+      profileName = profile.display_name;
+      showProfile = false;
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function uploadProfileAvatar(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await api("/api/profile/avatar", { method: "POST", body: form });
+      profile = await api("/api/me");
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function uploadPlaylistCover(event) {
+    const file = event.target.files?.[0];
+    if (!file || !selectedPlaylistId) return;
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      await api(`/api/playlists/${selectedPlaylistId}/cover`, { method: "POST", body: form });
+      selectedPlaylist = await api(`/api/playlists/${selectedPlaylistId}`);
+      await loadPlaylists();
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
   function downloadBackup() {
     window.open("/api/backup", "_blank");
   }
@@ -307,6 +360,10 @@
         {/each}
       </div>
       <div class="sidebar-footer">
+        <button class="profile-button" onclick={() => showProfile = !showProfile}>
+          <span>{profileName.slice(0, 1).toUpperCase()}</span>
+          <strong>{profileName}</strong>
+        </button>
         <button onclick={downloadBackup}>Copia de seguridad</button>
         <label>Restaurar<input type="file" accept=".zip" onchange={restoreBackup} /></label>
         <button onclick={logout}>Cerrar sesión</button>
@@ -315,6 +372,23 @@
 
     <main class="main-panel">
       {#if error}<p class="error">{error}</p>{/if}
+      {#if showProfile}
+        <section class="profile-panel">
+          <div class="profile-avatar">
+            {#if profile?.avatar_url}
+              <img src={`${API_BASE}${profile.avatar_url}`} alt="" />
+            {:else}
+              <span>{profileName.slice(0, 1).toUpperCase()}</span>
+            {/if}
+            <label>Foto de perfil<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadProfileAvatar} /></label>
+          </div>
+          <form onsubmit={saveProfile}>
+            <label>Nombre visible<input bind:value={profileName} maxlength="100" /></label>
+            <label>Usuario<input bind:value={profileUsername} maxlength="63" autocomplete="username" /></label>
+            <button type="submit">Guardar perfil</button>
+          </form>
+        </section>
+      {/if}
       {#if uploadQueue.length}
         <section class="upload-panel" aria-live="polite">
           <div class="upload-summary">
@@ -350,7 +424,14 @@
 
       {#if selectedPlaylist}
         <section class="playlist-hero">
-          <div class="hero-cover">♫</div>
+          <div class="hero-cover">
+            {#if selectedPlaylist.cover_url}
+              <img src={`${API_BASE}${selectedPlaylist.cover_url}`} alt="" />
+            {:else}
+              ♫
+            {/if}
+            <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadPlaylistCover} /></label>
+          </div>
           <div>
             <span>Playlist</span>
             <h2>{selectedPlaylist.name}</h2>
@@ -376,7 +457,11 @@
           {#each visibleTracks as track}
             <article class:playing={currentTrack?.id === track.id}>
               <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
-                <span>{titleInitial(track.title)}</span>
+                {#if track.cover_url}
+                  <img src={`${API_BASE}${track.cover_url}`} alt="" />
+                {:else}
+                  <span>{titleInitial(track.title)}</span>
+                {/if}
                 <b>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</b>
               </button>
               <strong>{text(track.title, "Canción sin título")}</strong>
@@ -409,7 +494,8 @@
         <audio
           bind:this={audio}
           autoplay
-          src={`${API_BASE}/api/tracks/${currentTrack.id}/stream`}
+          preload="metadata"
+          src={streamUrl(currentTrack)}
           onplay={() => isPlaying = true}
           onpause={() => isPlaying = false}
           ontimeupdate={(event) => progress = event.currentTarget.currentTime}

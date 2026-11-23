@@ -66,6 +66,23 @@ def test_bearer_session_authentication():
     assert authenticated.json()["username"] == "owner"
 
 
+def test_owner_profile_name_is_editable():
+    login()
+    response = client.post(
+        "/api/profile",
+        json={"username": "andre", "display_name": "Andrés"},
+    )
+    assert response.status_code == 200
+    assert response.json()["username"] == "andre"
+    assert response.json()["display_name"] == "Andrés"
+    assert response.json()["role"] == "owner"
+    restored = client.post(
+        "/api/profile",
+        json={"username": "owner", "display_name": "Owner"},
+    )
+    assert restored.status_code == 200
+
+
 def test_create_playlist_and_favorite():
     login()
     playlist = client.post("/api/playlists", json={"name": "Smoke list"})

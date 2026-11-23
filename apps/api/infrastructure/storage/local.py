@@ -18,11 +18,14 @@ class LocalStorageProvider:
         path.write_bytes(content)
         return key
 
-    def open(self, key: str):
+    def open(self, key: str, start: int | None = None, end: int | None = None):
         path = self._path(key)
         if not path.is_file():
             raise FileNotFoundError(key)
-        return path.open("rb")
+        source = path.open("rb")
+        if start is not None:
+            source.seek(start)
+        return source
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)

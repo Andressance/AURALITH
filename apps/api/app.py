@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from mutagen import File as MutagenFile
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy import inspect, text
 
 try:
     from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
@@ -75,6 +76,8 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     username = Column(String, unique=True, nullable=False)
+    display_name = Column(String)
+    avatar_path = Column(String)
     password_hash = Column(String, nullable=False)
     role = Column(String, default="owner", nullable=False)
 
@@ -107,6 +110,7 @@ class Track(Base):
     file_name = Column(String, nullable=False)
     stored_path = Column(String, nullable=False)
     mime_type = Column(String, nullable=False)
+    cover_path = Column(String)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -115,6 +119,7 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=False)
+    cover_path = Column(String)
 
 
 class PlaylistTrack(Base):
@@ -133,6 +138,32 @@ class Favorite(Base):
 
 
 Base.metadata.create_all(engine)
+
+
+def ensure_optional_columns():
+    columns = {
+        "users": (
+            ("display_name", "VARCHAR"),
+            ("avatar_path", "VARCHAR"),
+        ),
+        "tracks": (("cover_path", "VARCHAR"),),
+        "playlists": (("cover_path", "VARCHAR"),),
+    }
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        for table_name, table_columns in columns.items():
+            existing = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name, column_type in table_columns:
+                if column_name not in existing:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} "
+                            f"ADD COLUMN {column_name} {column_type}"
+                        )
+                    )
+
+
+ensure_optional_columns()
 password_hasher = PasswordHasher()
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
@@ -229,14 +260,15 @@ def current_user(
     db: Annotated[Session, Depends(db_session)],
     auralith_session: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    token: str | None = None,
 ):
     bearer_token = None
     if authorization and authorization.lower().startswith("bearer "):
         bearer_token = authorization[7:].strip()
-    token = bearer_token or auralith_session
-    if not token:
+    auth_token = bearer_token or auralith_session or token
+    if not auth_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    digest = token_hash(token)
+    digest = token_hash(auth_token)
     session = db.scalar(select(Session).where(Session.token_hash == digest))
     now = datetime.now(timezone.utc)
     expires_at = normalize_utc(session.expires_at) if session else now
@@ -346,10 +378,116 @@ def logout_all(
 
 @app.get("/api/me")
 def me(user: Annotated[User, Depends(current_user)]):
-    return {"id": user.id, "username": user.username, "role": user.role}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": getattr(user, "display_name", None) or user.username,
+        "role": user.role,
+        "avatar_url": f"/api/profile/avatar" if getattr(user, "avatar_path", None) else None,
+    }
+
+
+@app.post("/api/profile")
+async def update_profile(
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    display_name = str(payload.get("display_name") or "").strip()[:100]
+    username = str(payload.get("username") or user.username).strip()
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{2,63}", username):
+        raise HTTPException(status_code=400, detail="Username contains unsupported characters")
+    existing = db.scalar(select(User).where(User.username == username, User.id != user.id))
+    if existing:
+        raise HTTPException(status_code=409, detail="Username is already in use")
+    user.username = username
+    user.display_name = display_name or None
+    db.commit()
+    db.refresh(user)
+    return me(user)
+
+
+@app.post("/api/profile/avatar")
+async def update_profile_avatar(
+    file: UploadFile,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    return await update_avatar(file, db, user)
+
+
+@app.get("/api/profile/avatar")
+def profile_avatar(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    return image_response(getattr(user, "avatar_path", None), "Avatar not found")
+
+
+async def update_avatar(file: UploadFile, db: Session, user: User):
+    path, content_type = await upload_profile_image(file, f"avatars/{user.id}")
+    user.avatar_path = path
+    db.commit()
+    return {"avatar_url": "/api/profile/avatar", "content_type": content_type}
+
+
+async def upload_profile_image(file: UploadFile, key_prefix: str) -> tuple[str, str]:
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_IMAGE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Only JPG, PNG and WebP images are supported")
+    content = await file.read(5 * 1024 * 1024 + 1)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image exceeds 5 MB")
+    content_type = ALLOWED_IMAGE_SUFFIXES[suffix]
+    if content_type == "image/jpeg" and not (content.startswith(b"\xff\xd8\xff")):
+        raise HTTPException(status_code=400, detail="Invalid JPEG image")
+    if content_type == "image/png" and not content.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=400, detail="Invalid PNG image")
+    if content_type == "image/webp" and not (len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"):
+        raise HTTPException(status_code=400, detail="Invalid WebP image")
+    path = f"{key_prefix}{suffix}"
+    storage.upload(path, content, content_type)
+    return path, content_type
+
+
+def image_response(path: str | None, not_found: str):
+    if not path:
+        raise HTTPException(status_code=404, detail=not_found)
+    try:
+        suffix = Path(path).suffix.lower()
+        media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
+        source = storage.open(path)
+        return StreamingResponse(source, media_type=media_type)
+    except Exception as error:
+        raise HTTPException(status_code=404, detail=not_found) from error
 
 
 ALLOWED_SUFFIXES = {".mp3": "audio/mpeg", ".flac": "audio/flac"}
+ALLOWED_IMAGE_SUFFIXES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+def extract_cover(tags) -> tuple[bytes, str] | None:
+    if not tags:
+        return None
+    try:
+        for picture in getattr(tags, "pictures", []) or []:
+            data = getattr(picture, "data", None)
+            mime = getattr(picture, "mime", "")
+            if data:
+                suffix = ".jpg" if "jpeg" in mime else ".png" if "png" in mime else ".webp" if "webp" in mime else ".jpg"
+                return data, suffix
+    except Exception:
+        pass
+    try:
+        apic_frames = tags.tags.getall("APIC") if hasattr(tags, "tags") and tags.tags else []
+        for frame in apic_frames:
+            if getattr(frame, "data", None):
+                mime = getattr(frame, "mime", "")
+                suffix = ".jpg" if "jpeg" in mime else ".png" if "png" in mime else ".webp" if "webp" in mime else ".jpg"
+                return frame.data, suffix
+    except Exception:
+        pass
+    return None
 
 
 @app.post("/api/tracks")
@@ -401,6 +539,10 @@ async def upload_track(
                 info = tags.info if tags else None
                 duration = int(getattr(info, "length", 0) or 0)
                 metadata = tags.tags if tags and tags.tags else {}
+                cover = None
+                raw_tags = MutagenFile(probe.name)
+                if raw_tags:
+                    cover = extract_cover(raw_tags)
 
         def first(key: str):
             value = metadata.get(key)
@@ -424,6 +566,15 @@ async def upload_track(
     except Exception:
         storage.delete(stored_key)
         raise HTTPException(status_code=400, detail="Invalid or unreadable audio file")
+    cover_path = None
+    if cover:
+        cover_bytes, cover_suffix = cover
+        cover_path = f"covers/{digest}{cover_suffix}"
+        try:
+            cover_content_type = ALLOWED_IMAGE_SUFFIXES[cover_suffix]
+            storage.upload(cover_path, cover_bytes, cover_content_type)
+        except Exception:
+            cover_path = None
     track = Track(
         user_id=user.id,
         title=str(title),
@@ -436,6 +587,7 @@ async def upload_track(
         file_name=clean_metadata(Path(file.filename or "").name, stored_name) or stored_name,
         stored_path=stored_key,
         mime_type=ALLOWED_SUFFIXES[suffix],
+        cover_path=cover_path,
     )
     db.add(track)
     db.commit()
@@ -453,6 +605,7 @@ def track_to_dict(track: Track):
         "genre": track.genre,
         "duration": track.duration,
         "file_name": track.file_name,
+        "cover_url": f"/api/tracks/{track.id}/cover" if getattr(track, "cover_path", None) else None,
     }
 
 
@@ -460,6 +613,24 @@ def track_to_dict(track: Track):
 def list_tracks(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     tracks = db.scalars(select(Track).where(Track.user_id == user.id).order_by(Track.created_at.desc()))
     return [track_to_dict(track) for track in tracks]
+
+
+@app.get("/api/tracks/{track_id}/cover")
+def track_cover(
+    track_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    if not track or not getattr(track, "cover_path", None):
+        raise HTTPException(status_code=404, detail="Cover not found")
+    try:
+        source = storage.open(track.cover_path)
+        suffix = Path(track.cover_path).suffix.lower()
+        media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
+        return StreamingResponse(source, media_type=media_type)
+    except Exception as error:
+        raise HTTPException(status_code=404, detail="Cover not found") from error
 
 
 @app.get("/api/search")
@@ -504,7 +675,7 @@ def stream_track(
     status = 200
     headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "private, no-store",
+        "Cache-Control": "private, max-age=3600",
         "Content-Type": track.mime_type,
     }
     if range_header:
@@ -542,12 +713,12 @@ def stream_track(
     )
 
 
-def iter_storage(provider, key: str, start: int, end: int, chunk_size: int = 1024 * 1024):
-    with provider.open(key) as source:
-        if hasattr(source, "seek"):
-            source.seek(start)
-        else:
-            source.read(start)
+def iter_storage(provider, key: str, start: int, end: int, chunk_size: int = 256 * 1024):
+    try:
+        source = provider.open(key, start=start, end=end)
+    except TypeError:
+        source = provider.open(key)
+    with source:
         remaining = end - start + 1
         while remaining:
             chunk = source.read(min(chunk_size, remaining))
@@ -560,7 +731,11 @@ def iter_storage(provider, key: str, start: int, end: int, chunk_size: int = 102
 @app.get("/api/playlists")
 def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     playlists = db.scalars(select(Playlist).where(Playlist.user_id == user.id).order_by(Playlist.id))
-    return [{"id": p.id, "name": p.name} for p in playlists]
+    return [{
+        "id": p.id,
+        "name": p.name,
+        "cover_url": f"/api/playlists/{p.id}/cover" if getattr(p, "cover_path", None) else None,
+    } for p in playlists]
 
 
 @app.post("/api/playlists")
@@ -595,8 +770,37 @@ def get_playlist(
     return {
         "id": playlist.id,
         "name": playlist.name,
+        "cover_url": f"/api/playlists/{playlist.id}/cover" if getattr(playlist, "cover_path", None) else None,
         "tracks": [track_to_dict(tracks_by_id[track_id]) for track_id in track_ids if track_id in tracks_by_id],
     }
+
+
+@app.post("/api/playlists/{playlist_id}/cover")
+async def update_playlist_cover(
+    playlist_id: int,
+    file: UploadFile,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    path, content_type = await upload_profile_image(file, f"playlist-covers/{playlist.id}")
+    playlist.cover_path = path
+    db.commit()
+    return {"cover_url": f"/api/playlists/{playlist.id}/cover", "content_type": content_type}
+
+
+@app.get("/api/playlists/{playlist_id}/cover")
+def playlist_cover(
+    playlist_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return image_response(getattr(playlist, "cover_path", None), "Playlist cover not found")
 
 
 @app.delete("/api/playlists/{playlist_id}")

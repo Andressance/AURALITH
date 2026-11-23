@@ -59,9 +59,12 @@ class SupabaseStorageProvider:
             pass
         return key
 
-    def open(self, key: str):
+    def open(self, key: str, start: int | None = None, end: int | None = None):
         endpoint = f"{self.url}/storage/v1/object/authenticated/{quote(self.bucket)}/{quote(key, safe='/')}"
-        return self._open(Request(endpoint, headers=self._headers()))
+        headers = self._headers()
+        if start is not None and end is not None:
+            headers["Range"] = f"bytes={start}-{end}"
+        return self._open(Request(endpoint, headers=headers))
 
     def delete(self, key: str) -> None:
         endpoint = f"{self.url}/storage/v1/object/{quote(self.bucket)}"
