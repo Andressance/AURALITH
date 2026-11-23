@@ -26,6 +26,7 @@
   let profileUsername = "";
   let selectedTrackIds = [];
   let showPlaylistPicker = false;
+  let dragOverPlaylistId = null;
   let newPlaylistName = "";
   let playerVisible = false;
   let pullDistance = 0;
@@ -256,6 +257,41 @@
       : [...selectedTrackIds, trackId];
   }
 
+  function openTrackPlaylistPicker(trackId) {
+    selectedTrackIds = [trackId];
+    showPlaylistPicker = true;
+  }
+
+  function startTrackDrag(event, trackId) {
+    if (!selectedTrackIds.includes(trackId)) {
+      selectedTrackIds = [trackId];
+    }
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData("text/auralith-track", String(trackId));
+  }
+
+  function endTrackDrag() {
+    dragOverPlaylistId = null;
+  }
+
+  function dragTrackOver(event, playlistId) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    dragOverPlaylistId = playlistId;
+  }
+
+  function leavePlaylistDrop(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      dragOverPlaylistId = null;
+    }
+  }
+
+  async function dropTracksOnPlaylist(event, playlistId) {
+    event.preventDefault();
+    dragOverPlaylistId = null;
+    await addSelectedToPlaylist(playlistId);
+  }
+
   async function addSelectedToPlaylist(playlistId) {
     if (!selectedTrackIds.length) return;
     await api(`/api/playlists/${playlistId}/tracks`, {
@@ -480,36 +516,6 @@
     </form>
   </main>
 
-  {#if selectedTrackIds.length}
-    <section class="selection-bar">
-      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
-      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
-      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
-    </section>
-  {/if}
-
-  {#if showPlaylistPicker}
-    <div class="playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir a playlist">
-      <div class="sheet-heading">
-        <strong>Añadir a una playlist</strong>
-        <button onclick={() => showPlaylistPicker = false}>×</button>
-      </div>
-      <form onsubmit={createPlaylistWithSelection}>
-        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
-        <button type="submit">Crear y añadir</button>
-      </form>
-      {#each playlists as playlist}
-        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
-          {#if playlist.cover_url}
-            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
-          {:else if activeView === "library"}
-            <span>♫</span>
-          {/if}
-          <strong>{playlist.name}</strong>
-        </button>
-      {/each}
-    </div>
-  {/if}
 {:else}
   <div class="app-shell" class:player-visible={playerVisible}>
     <aside class="sidebar">
@@ -533,7 +539,16 @@
           <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
         </div>
         {#each playlists as playlist}
-          <div class="playlist-item" class:selected={selectedPlaylistId === playlist.id}>
+          <div
+            class="playlist-item"
+            class:selected={selectedPlaylistId === playlist.id}
+            class:drop-target={dragOverPlaylistId === playlist.id}
+            role="group"
+            aria-label={`Playlist ${playlist.name}`}
+            ondragover={(event) => dragTrackOver(event, playlist.id)}
+            ondragleave={leavePlaylistDrop}
+            ondrop={(event) => dropTracksOnPlaylist(event, playlist.id)}
+          >
             <button class="playlist-open" onclick={() => selectPlaylist(playlist)}>
               {#if playlist.cover_url}
                 <img class="playlist-cover" src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
@@ -750,7 +765,12 @@
         </section>
         <section class="track-list playlist-tracks">
           {#each selectedPlaylist.tracks as track, index}
-            <article class:playing={currentTrack?.id === track.id}>
+            <article
+              class:playing={currentTrack?.id === track.id}
+              draggable="true"
+              ondragstart={(event) => startTrackDrag(event, track.id)}
+              ondragend={endTrackDrag}
+            >
               <span class="track-index">{index + 1}</span>
               <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
               <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
@@ -765,7 +785,12 @@
         </section>
         <section class="track-grid">
           {#each visibleTracks as track}
-            <article class:playing={currentTrack?.id === track.id}>
+            <article
+              class:playing={currentTrack?.id === track.id}
+              draggable="true"
+              ondragstart={(event) => startTrackDrag(event, track.id)}
+              ondragend={endTrackDrag}
+            >
               <label class="track-select">
                 <input
                   type="checkbox"
@@ -785,6 +810,7 @@
               <strong>{text(track.title, "Canción sin título")}</strong>
               <span>{text(track.artist, "Artista desconocido")}</span>
               <div class="track-actions">
+                <button onclick={() => openTrackPlaylistPicker(track.id)} aria-label="Añadir a playlist" title="Añadir a playlist">＋</button>
                 <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
                 <button onclick={() => deleteTrack(track)} aria-label="Eliminar" title="Eliminar">×</button>
               </div>
@@ -829,4 +855,34 @@
       </footer>
     {/if}
   </div>
+  {#if selectedTrackIds.length}
+    <section class="selection-bar">
+      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
+      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
+      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
+    </section>
+  {/if}
+
+  {#if showPlaylistPicker}
+    <div class="playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir a playlist">
+      <div class="sheet-heading">
+        <strong>Añadir a una playlist</strong>
+        <button onclick={() => showPlaylistPicker = false}>×</button>
+      </div>
+      <form onsubmit={createPlaylistWithSelection}>
+        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
+        <button type="submit">Crear y añadir</button>
+      </form>
+      {#each playlists as playlist}
+        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
+          {#if playlist.cover_url}
+            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
+          {:else}
+            <span>♫</span>
+          {/if}
+          <strong>{playlist.name}</strong>
+        </button>
+      {/each}
+    </div>
+  {/if}
 {/if}

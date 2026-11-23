@@ -143,6 +143,11 @@ button { cursor: pointer; }
 .playlist-item:focus-within .playlist-play { opacity: 1; transform: scale(1); }
 .playlist-play:hover { background: #a78bfa; }
 .playlist-item:hover, .playlist-item.selected { background: #282828; }
+.playlist-item.drop-target {
+  background: #3a2465;
+  outline: 2px solid #a78bfa;
+  outline-offset: -2px;
+}
 .playlist-item span:last-child { display: grid; }
 .playlist-item strong { font-size: 13px; }
 .playlist-item small { color: #a7a7a7; margin-top: 3px; }
