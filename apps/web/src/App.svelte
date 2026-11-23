@@ -725,7 +725,10 @@
       {/if}
       {#if activeView === "library"}
         <header class="topbar">
-          <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
+          </label>
         </header>
       {/if}
 
