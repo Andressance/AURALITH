@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: auralith-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: AURALITH_DB_URL
+        sync: false
+      - key: AURALITH_OWNER_PASSWORD
+        sync: false
+      - key: AURALITH_COOKIE_SECURE
+        value: "true"
+      - key: AURALITH_RESET_OWNER_PASSWORD
+        value: "false"
+      - key: AURALITH_STORAGE_PROVIDER
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: music
+      - key: AURALITH_CORS_ORIGINS
+        sync: false

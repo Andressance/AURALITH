@@ -1,0 +1,48 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      AURALITH_DB_URL: ${AURALITH_DB_URL:-sqlite:////data/auralith.db}
+      AURALITH_DATA_DIR: /data
+      AURALITH_STORAGE_DIR: /data/music
+      AURALITH_STORAGE_PROVIDER: ${AURALITH_STORAGE_PROVIDER:-local}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-music}
+      AURALITH_OWNER_USERNAME: ${AURALITH_OWNER_USERNAME:-owner}
+      AURALITH_OWNER_PASSWORD: ${AURALITH_OWNER_PASSWORD:?Set AURALITH_OWNER_PASSWORD in .env}
+      AURALITH_RESET_OWNER_PASSWORD: ${AURALITH_RESET_OWNER_PASSWORD:-false}
+      AURALITH_COOKIE_SECURE: "false"
+      AURALITH_ALLOW_INSECURE_COOKIES: "true"
+      AURALITH_CORS_ORIGINS: ${AURALITH_CORS_ORIGINS:-http://localhost:8080,http://localhost:5173}
+      AURALITH_ENV: development
+    volumes:
+      - auralith-data:/data
+    expose:
+      - "8000"
+
+  web:
+    image: node:24-alpine
+    working_dir: /app
+    volumes:
+      - ./apps/web:/app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deployment/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+      - web
+
+volumes:
+  auralith-data:
