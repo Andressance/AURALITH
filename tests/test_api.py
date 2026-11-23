@@ -1,6 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
+from datetime import datetime, timezone
 
 os.environ["AURALITH_OWNER_USERNAME"] = "owner"
 os.environ["AURALITH_OWNER_PASSWORD"] = "TestPassword123!"
@@ -13,7 +14,7 @@ os.environ["AURALITH_STORAGE_DIR"] = str(DATA_DIR / "music")
 os.environ["AURALITH_DB_URL"] = f"sqlite:///{DATA_DIR / 'test.db'}"
 
 from fastapi.testclient import TestClient
-from apps.api.app import app, Track, SessionLocal, storage
+from apps.api.app import app, Track, SessionLocal, storage, normalize_utc
 
 client = TestClient(app)
 
@@ -29,6 +30,13 @@ def login():
 
 def test_health_is_public():
     assert client.get("/api/health").status_code == 200
+
+
+def test_datetime_normalization_for_postgres_sessions():
+    naive = datetime(2026, 11, 23, 18, 0)
+    aware = datetime(2026, 11, 23, 18, 0, tzinfo=timezone.utc)
+    assert normalize_utc(naive).tzinfo == timezone.utc
+    assert normalize_utc(aware).tzinfo == timezone.utc
 
 
 def test_library_requires_authentication():

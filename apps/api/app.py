@@ -87,6 +87,12 @@ class Session(Base):
     expires_at = Column(DateTime, nullable=False)
 
 
+def normalize_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class Track(Base):
     __tablename__ = "tracks"
     id = Column(Integer, primary_key=True)
@@ -221,8 +227,9 @@ def current_user(
         raise HTTPException(status_code=401, detail="Not authenticated")
     digest = token_hash(auralith_session)
     session = db.scalar(select(Session).where(Session.token_hash == digest))
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    if not session or session.expires_at < now:
+    now = datetime.now(timezone.utc)
+    expires_at = normalize_utc(session.expires_at) if session else now
+    if not session or expires_at <= now:
         if session:
             db.delete(session)
             db.commit()
@@ -264,7 +271,7 @@ def login(request: Request, payload: dict, db: Annotated[Session, Depends(db_ses
         raise HTTPException(status_code=401, detail="Invalid credentials")
     login_rate_limiter.reset(client_ip)
     token = secrets.token_urlsafe(32)
-    expires = datetime.now(timezone.utc) + timedelta(hours=12)
+    expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=12)
     db.add(Session(user_id=user.id, token_hash=token_hash(token), expires_at=expires))
     db.commit()
     response = JSONResponse({"ok": True})
