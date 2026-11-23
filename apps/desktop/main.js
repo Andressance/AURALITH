@@ -1,14 +1,44 @@
-const { app, BrowserWindow, shell, Menu, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, Menu, nativeImage, ipcMain } = require("electron");
 const net = require("net");
 const path = require("path");
+const fs = require("fs");
 
-const appUrl = process.env.AURALITH_URL || "http://localhost:8080";
+const settingsPath = path.join(app.getPath("userData"), "auralith-desktop.json");
+function loadSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+function saveSettings(settings) {
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings));
+}
+const settings = loadSettings();
+let appUrl = process.env.AURALITH_URL || settings.url || "";
 const applicationId = process.env.DISCORD_APPLICATION_ID || "";
 let mainWindow;
 let discordSocket;
 let rpcNonce = 0;
 let discordReady = false;
 let lastPresenceKey = "";
+
+function showSetupPage(failedUrl = "", errorDescription = "") {
+  if (!mainWindow) return;
+  mainWindow.loadFile(path.join(__dirname, "setup.html"));
+  mainWindow.webContents.once("did-finish-load", () => {
+    mainWindow.webContents.executeJavaScript(`(() => {
+      document.getElementById("url").value = ${JSON.stringify(settings.url || process.env.AURALITH_URL || "")};
+      const failed = ${JSON.stringify(failedUrl)};
+      const detail = ${JSON.stringify(errorDescription)};
+      if (failed) {
+        document.getElementById("status").textContent = "No se pudo abrir " + failed + (detail ? ": " + detail : "");
+        document.getElementById("status").className = "error";
+      }
+    })()`).catch(() => {});
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -21,11 +51,19 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
-  mainWindow.loadURL(appUrl);
+  if (appUrl) {
+    mainWindow.loadURL(appUrl).catch(() => showSetupPage());
+  } else {
+    showSetupPage();
+  }
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, failedUrl, isMainFrame) => {
+    if (isMainFrame && errorCode !== -3) showSetupPage(failedUrl, errorDescription);
+  });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { deny: true };
@@ -139,6 +177,19 @@ async function syncPresence() {
 app.whenReady().then(() => {
   createWindow();
   connectDiscord();
+});
+
+ipcMain.handle("auralith:save-url", (_event, rawUrl) => {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Unsupported protocol");
+    appUrl = parsed.toString().replace(/\/$/, "");
+    saveSettings({ ...loadSettings(), url: appUrl });
+    mainWindow.loadURL(appUrl);
+    return { ok: true };
+  } catch (cause) {
+    return { ok: false, error: cause.message };
+  }
 });
 
 app.on("window-all-closed", () => {
