@@ -41,6 +41,16 @@ def build_allowed_origins(configured: str) -> set[str]:
     return origins
 
 
+def is_allowed_origin(origin: str, allowed_origins: set[str]) -> bool:
+    normalized = origin.strip().rstrip("/")
+    if normalized in allowed_origins:
+        return True
+    if os.getenv("AURALITH_ALLOW_VERCEL_ORIGINS", "true").lower() == "true":
+        if normalized.startswith("https://") and normalized.endswith(".vercel.app"):
+            return True
+    return False
+
+
 class LoginRateLimiter:
     def __init__(self, limit: int = 5, window_seconds: int = 15 * 60):
         self.limit = limit

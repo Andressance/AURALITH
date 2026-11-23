@@ -27,6 +27,7 @@ try:
     from apps.api.infrastructure.storage.s3 import S3StorageProvider
     from apps.api.core.security import (
         build_allowed_origins,
+        is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
     )
@@ -181,7 +182,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(ALLOWED_ORIGINS),
+    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "Range"],
@@ -193,7 +194,7 @@ async def security_middleware(request: Request, call_next):
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
         if origin:
-            if origin.rstrip("/") not in ALLOWED_ORIGINS:
+            if not is_allowed_origin(origin, ALLOWED_ORIGINS):
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
