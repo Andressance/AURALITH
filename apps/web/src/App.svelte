@@ -9,6 +9,9 @@
   let error = "";
   let audio;
   let currentTrack;
+  let uploadProgress = "";
+  let uploading = false;
+  let uploadQueue = [];
   let isPlaying = false;
   let progress = 0;
   let duration = 0;
@@ -79,17 +82,53 @@
   }
 
   async function upload(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
     error = "";
-    const form = new FormData();
-    form.append("file", file);
-    try {
-      await api("/api/tracks", { method: "POST", body: form });
-      await loadTracks();
-    } catch (cause) {
-      error = cause.message;
+    uploading = true;
+    uploadQueue = files.map((file) => ({
+      name: file.name,
+      status: "pending",
+      detail: "En cola"
+    }));
+    uploadProgress = `0 de ${files.length} completadas`;
+
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      uploadQueue = uploadQueue.map((item, itemIndex) =>
+        itemIndex === index
+          ? { ...item, status: "uploading", detail: "Subiendo..." }
+          : item
+      );
+      uploadProgress = `${index} de ${files.length} completadas`;
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const uploadedTrack = await api("/api/tracks", { method: "POST", body: form });
+        if (selectedPlaylistId && uploadedTrack.id) {
+          await api(`/api/playlists/${selectedPlaylistId}/tracks/${uploadedTrack.id}`, { method: "POST" });
+        }
+        uploadQueue = uploadQueue.map((item, itemIndex) =>
+          itemIndex === index
+            ? { ...item, status: "done", detail: uploadedTrack.duplicate ? "Ya estaba en la biblioteca" : "Subida completada" }
+            : item
+        );
+      } catch (cause) {
+        uploadQueue = uploadQueue.map((item, itemIndex) =>
+          itemIndex === index
+            ? { ...item, status: "error", detail: cause.message }
+            : item
+        );
+        error = "Algunas canciones no se pudieron subir.";
+      }
     }
+    uploadProgress = `${files.length} de ${files.length} completadas`;
+    uploading = false;
+    event.target.value = "";
+    await Promise.all([
+      loadTracks(),
+      selectedPlaylistId ? selectPlaylist(playlists.find((playlist) => playlist.id === selectedPlaylistId) || { id: selectedPlaylistId }) : Promise.resolve()
+    ]);
   }
 
   async function createPlaylist() {
@@ -227,7 +266,7 @@
       <div class="sidebar-library">
         <div class="sidebar-heading">
           <h2>Tu biblioteca</h2>
-          <label class="icon-upload" title="Subir música">＋<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
+          <label class="icon-upload" title="Subir música">＋<input type="file" multiple accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
         </div>
         <div class="playlist-create">
           <input bind:value={playlistName} placeholder="Nueva playlist" />
@@ -249,6 +288,35 @@
 
     <main class="main-panel">
       {#if error}<p class="error">{error}</p>{/if}
+      {#if uploadQueue.length}
+        <section class="upload-panel" aria-live="polite">
+          <div class="upload-summary">
+            <div>
+              <strong>{uploading ? "Subiendo canciones" : "Subida finalizada"}</strong>
+              <span>{uploadProgress}</span>
+            </div>
+            {#if !uploading}
+              <button onclick={() => uploadQueue = []} aria-label="Cerrar resumen">×</button>
+            {/if}
+          </div>
+          <div class="upload-progress-bar">
+            <span style={`width: ${(uploadQueue.filter((item) => item.status === "done" || item.status === "error").length / uploadQueue.length) * 100}%`}></span>
+          </div>
+          <div class="upload-list">
+            {#each uploadQueue as item}
+              <div class={`upload-item ${item.status}`}>
+                <span class="upload-status">
+                  {item.status === "done" ? "✓" : item.status === "error" ? "!" : item.status === "uploading" ? "↻" : "·"}
+                </span>
+                <div>
+                  <strong>{item.name}</strong>
+                  <small>{item.detail}</small>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
       <header class="topbar">
         <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
       </header>
@@ -275,7 +343,7 @@
       {:else}
         <section class="library-header">
           <div><span>Tu música</span><h2>Made for you</h2></div>
-          <label class="primary-upload">Subir canción<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
+          <label class="primary-upload" class:disabled={uploading}>Subir canciones<input type="file" multiple accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} disabled={uploading} /></label>
         </section>
         <section class="track-grid">
           {#each visibleTracks as track}
