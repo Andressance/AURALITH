@@ -2,7 +2,11 @@ from pathlib import Path
 
 from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
 from apps.api.infrastructure.storage.local import LocalStorageProvider
-from apps.api.core.security import is_strong_owner_password, LoginRateLimiter
+from apps.api.core.security import (
+    is_allowed_origin,
+    is_strong_owner_password,
+    LoginRateLimiter,
+)
 
 
 def test_local_storage_round_trip(tmp_path: Path):
@@ -103,3 +107,8 @@ def test_login_rate_limiter_blocks_after_limit():
     assert limiter.allow("127.0.0.1")
     assert not limiter.allow("127.0.0.1")
     assert limiter.allow("127.0.0.2")
+
+
+def test_vercel_origin_is_allowed():
+    assert is_allowed_origin("https://auralith.vercel.app", set())
+    assert not is_allowed_origin("https://example.com", set())

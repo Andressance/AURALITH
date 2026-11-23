@@ -38,6 +38,7 @@ except ModuleNotFoundError:
     from infrastructure.storage.s3 import S3StorageProvider
     from core.security import (
         build_allowed_origins,
+        is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
     )
