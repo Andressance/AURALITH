@@ -50,6 +50,9 @@ The detailed architecture, security model, roadmap, and future federation design
 #### Supabase + Render
 
 1. Create a PostgreSQL database in Supabase and configure `AURALITH_DB_URL` with the PostgreSQL connection string.
+   - On Render, prefer the Supabase IPv4-compatible **Transaction pooler** string.
+   - Use port `6543`; avoid the direct connection on port `5432` if Render reports IPv6 network errors.
+   - The SQLAlchemy URL should use `postgresql+psycopg://` and include `sslmode=require` when supported.
 2. Apply `supabase/migrations/202611230001_initial.sql`.
 3. Create a private Supabase Storage bucket named `music`.
 4. Deploy `apps/api` to Render using `render.yaml` or the Dockerfile.

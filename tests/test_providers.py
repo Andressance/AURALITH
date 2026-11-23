@@ -40,6 +40,26 @@ def test_sqlalchemy_provider_supports_sqlite(tmp_path: Path):
     provider.dispose()
 
 
+def test_sqlalchemy_provider_normalizes_postgres_urls():
+    postgres_url = "postgresql://postgres.example:password@aws-0-region.pooler.supabase.com:6543/postgres"
+
+    normalized = SQLAlchemyDatabaseProvider.normalize_url(postgres_url)
+
+    assert normalized.startswith("postgresql+psycopg://")
+    assert ":6543/" in normalized
+    assert "sslmode=require" in normalized
+
+
+def test_sqlalchemy_provider_rejects_direct_supabase_host():
+    direct_url = "postgresql://postgres:password@db.project.supabase.co:5432/postgres"
+
+    try:
+        SQLAlchemyDatabaseProvider.normalize_url(direct_url)
+        assert False, "direct Supabase host should be rejected"
+    except RuntimeError as error:
+        assert "6543" in str(error)
+
+
 def test_password_policy_rejects_weak_defaults():
     assert not is_strong_owner_password("change-me")
     assert not is_strong_owner_password("ChangeMe123456")
