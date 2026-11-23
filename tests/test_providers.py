@@ -60,11 +60,18 @@ def test_sqlalchemy_provider_rejects_direct_supabase_host():
         assert "6543" in str(error)
 
 
-def test_neon_is_not_documented_as_storage(monkeypatch):
-    monkeypatch.setenv("AURALITH_STORAGE_PROVIDER", "neon")
-    provider = __import__("os").environ["AURALITH_STORAGE_PROVIDER"]
-    assert provider != "supabase"
-    assert provider != "local"
+def test_s3_provider_accepts_neon_environment(monkeypatch):
+    from apps.api.infrastructure.storage.s3 import S3StorageProvider
+
+    monkeypatch.setenv("NEON_URL", "https://storage.example.com")
+    monkeypatch.setenv("NEON_STORAGE_BUCKET", "music")
+    monkeypatch.setenv("NEON_ACCESS_KEY_ID", "test-access")
+    monkeypatch.setenv("NEON_SECRET_ACCESS_KEY", "test-secret")
+
+    provider = S3StorageProvider()
+
+    assert provider.endpoint == "https://storage.example.com"
+    assert provider.bucket == "music"
 
 
 def test_password_policy_rejects_weak_defaults():

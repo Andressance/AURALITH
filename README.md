@@ -47,14 +47,15 @@ The detailed architecture, security model, roadmap, and future federation design
 
 ### Neon database and storage
 
-Neon and Supabase have separate roles:
+Neon can provide both PostgreSQL and S3-compatible object storage:
 
-- Neon provides PostgreSQL. Set `AURALITH_DB_URL` to the Neon connection string.
-- Supabase Storage provides object storage. Set `AURALITH_STORAGE_PROVIDER=supabase`.
-- Set `SUPABASE_URL` to the Supabase project URL.
-- Set `SUPABASE_SECRET_KEY` to the Supabase `Secret key`.
-- Set `SUPABASE_STORAGE_BUCKET=music`.
-- Do not set `AURALITH_STORAGE_PROVIDER=neon`; Neon does not provide this project's audio storage API.
+- Neon PostgreSQL: set `AURALITH_DB_URL` to the Neon PostgreSQL connection string.
+- Neon Object Storage: set `AURALITH_STORAGE_PROVIDER=neon`.
+- Set `NEON_URL` to the S3-compatible endpoint or `NEON_STORAGE_ENDPOINT`.
+- Set `NEON_STORAGE_BUCKET=music`.
+- Set `NEON_ACCESS_KEY_ID` and `NEON_SECRET_ACCESS_KEY`.
+
+Alternatively, use `AURALITH_STORAGE_PROVIDER=supabase` with Supabase Storage variables.
 
 ### Deployment
 

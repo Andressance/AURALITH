@@ -24,6 +24,7 @@ try:
     from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
     from apps.api.infrastructure.storage.local import LocalStorageProvider
     from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
+    from apps.api.infrastructure.storage.s3 import S3StorageProvider
     from apps.api.core.security import (
         build_allowed_origins,
         is_strong_owner_password,
@@ -33,6 +34,7 @@ except ModuleNotFoundError:
     from infrastructure.database import SQLAlchemyDatabaseProvider
     from infrastructure.storage.local import LocalStorageProvider
     from infrastructure.storage.supabase import SupabaseStorageProvider
+    from infrastructure.storage.s3 import S3StorageProvider
     from core.security import (
         build_allowed_origins,
         is_strong_owner_password,
@@ -55,10 +57,11 @@ if storage_provider_name == "supabase":
     )
 elif storage_provider_name == "local":
     storage = LocalStorageProvider(STORAGE_DIR)
+elif storage_provider_name == "neon":
+    storage = S3StorageProvider()
 else:
     raise RuntimeError(
-        "AURALITH_STORAGE_PROVIDER must be 'local' or 'supabase'; "
-        "Neon is a PostgreSQL database provider, not an object-storage provider"
+        "AURALITH_STORAGE_PROVIDER must be 'local', 'supabase', or 'neon'"
     )
 
 
