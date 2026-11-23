@@ -33,6 +33,13 @@
   let pullStart = 0;
   let pulling = false;
   let refreshing = false;
+  let playbackQueue = [];
+  let shuffleMode = false;
+  let loopMode = "off";
+  let showUploadPlaylistPicker = false;
+  let pendingUploadFiles = [];
+  let uploadPlaylistIds = [];
+  let uploadNewPlaylistName = "";
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function viewFromPath() {
@@ -163,6 +170,19 @@
   async function upload(event) {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
+    if (files.length > 1) {
+      pendingUploadFiles = files;
+      uploadPlaylistIds = [];
+      uploadNewPlaylistName = "";
+      showUploadPlaylistPicker = true;
+      event.target.value = "";
+      return;
+    }
+    await runUpload(files);
+  }
+
+  async function runUpload(files) {
+    if (!files?.length) return;
     error = "";
     uploading = true;
     uploadQueue = files.map((file) => ({
@@ -172,6 +192,7 @@
     }));
     uploadProgress = `0 de ${files.length} completadas`;
 
+    const uploadedTrackIds = [];
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       uploadQueue = uploadQueue.map((item, itemIndex) =>
@@ -184,6 +205,7 @@
       form.append("file", file);
       try {
         const uploadedTrack = await api("/api/tracks", { method: "POST", body: form });
+        if (uploadedTrack.id) uploadedTrackIds.push(uploadedTrack.id);
         if (selectedPlaylistId && uploadedTrack.id) {
           await api(`/api/playlists/${selectedPlaylistId}/tracks/${uploadedTrack.id}`, { method: "POST" });
         }
@@ -203,7 +225,25 @@
     }
     uploadProgress = `${files.length} de ${files.length} completadas`;
     uploading = false;
-    event.target.value = "";
+    if (uploadNewPlaylistName.trim() && uploadedTrackIds.length) {
+      await api("/api/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: uploadNewPlaylistName.trim(), track_ids: uploadedTrackIds })
+      });
+    }
+    for (const playlistId of uploadPlaylistIds) {
+      if (uploadedTrackIds.length) {
+        await api(`/api/playlists/${playlistId}/tracks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_ids: uploadedTrackIds })
+        });
+      }
+    }
+    uploadPlaylistIds = [];
+    uploadNewPlaylistName = "";
+    pendingUploadFiles = [];
     await Promise.all([
       loadTracks(),
       selectedPlaylistId ? selectPlaylist(playlists.find((playlist) => playlist.id === selectedPlaylistId) || { id: selectedPlaylistId }) : Promise.resolve()
@@ -240,6 +280,7 @@
     const detail = await api(`/api/playlists/${playlist.id}`);
     selectedPlaylistId = playlist.id;
     selectedPlaylist = detail;
+    playbackQueue = detail.tracks || [];
     if (detail.tracks?.length) {
       play(detail.tracks[0]);
     }
@@ -400,6 +441,13 @@
   }
 
   function play(track) {
+    if (!playbackQueue.some((item) => item.id === track.id)) {
+      playbackQueue = selectedPlaylist?.tracks?.length
+        ? selectedPlaylist.tracks
+        : visibleTracks.length
+          ? visibleTracks
+          : tracks;
+    }
     if (currentTrack?.id === track.id && audio) {
       if (audio.paused) {
         audio.play();
@@ -424,6 +472,70 @@
     } else {
       audio.pause();
     }
+  }
+
+  function getNextQueueIndex() {
+    if (!playbackQueue.length) return -1;
+    if (shuffleMode) {
+      if (playbackQueue.length === 1) return 0;
+      const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+      let nextIndex = currentIndex;
+      while (nextIndex === currentIndex) {
+        nextIndex = Math.floor(Math.random() * playbackQueue.length);
+      }
+      return nextIndex;
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    return currentIndex >= 0 ? (currentIndex + 1) % playbackQueue.length : 0;
+  }
+
+  function playNext() {
+    const index = getNextQueueIndex();
+    if (index >= 0) play(playbackQueue[index]);
+  }
+
+  function playPrevious() {
+    if (!playbackQueue.length) return;
+    if (audio?.currentTime > 3) {
+      audio.currentTime = 0;
+      return;
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    const index = currentIndex > 0 ? currentIndex - 1 : playbackQueue.length - 1;
+    play(playbackQueue[index]);
+  }
+
+  function toggleShuffle() {
+    shuffleMode = !shuffleMode;
+  }
+
+  function cycleLoopMode() {
+    loopMode = loopMode === "off" ? "all" : loopMode === "all" ? "one" : "off";
+  }
+
+  function handleTrackEnded() {
+    if (loopMode === "one") {
+      if (audio) {
+        audio.currentTime = 0;
+        audio.play();
+      }
+      return;
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    if (loopMode === "all" || currentIndex < playbackQueue.length - 1) {
+      playNext();
+    }
+  }
+
+  function toggleUploadPlaylist(playlistId) {
+    uploadPlaylistIds = uploadPlaylistIds.includes(playlistId)
+      ? uploadPlaylistIds.filter((id) => id !== playlistId)
+      : [...uploadPlaylistIds, playlistId];
+  }
+
+  async function confirmUploadPlaylist() {
+    showUploadPlaylistPicker = false;
+    await runUpload(pendingUploadFiles);
   }
 
   function seek(event) {
@@ -493,6 +605,8 @@
     navigator.mediaSession.setActionHandler("seekto", (details) => {
       if (audio && Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime;
     });
+    navigator.mediaSession.setActionHandler("previoustrack", playPrevious);
+    navigator.mediaSession.setActionHandler("nexttrack", playNext);
   }
 
   load().catch(() => {});
@@ -833,7 +947,15 @@
           <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
         </div>
         <div class="player-center">
-          <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
+          <div class="player-controls">
+            <button class:active={shuffleMode} onclick={toggleShuffle} aria-label="Aleatorio" title="Aleatorio">⇄</button>
+            <button onclick={playPrevious} aria-label="Anterior" title="Anterior">↤</button>
+            <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
+            <button onclick={playNext} aria-label="Siguiente" title="Siguiente">↦</button>
+            <button class:active={loopMode !== "off"} onclick={cycleLoopMode} aria-label="Modo bucle" title={loopMode === "off" ? "Bucle desactivado" : loopMode === "all" ? "Repetir lista" : "Repetir canción"}>
+              {loopMode === "one" ? "↻1" : "↻"}
+            </button>
+          </div>
           <div class="timeline">
             <span>{formatTime(progress)}</span>
             <input aria-label="Posición" type="range" min="0" max={duration || 0} value={progress} oninput={seek} />
@@ -851,6 +973,7 @@
           ontimeupdate={(event) => progress = event.currentTarget.currentTime}
           onloadedmetadata={(event) => duration = event.currentTarget.duration}
           onvolumechange={(event) => volume = event.currentTarget.volume}
+          onended={handleTrackEnded}
         ></audio>
       </footer>
     {/if}
@@ -883,6 +1006,30 @@
           <strong>{playlist.name}</strong>
         </button>
       {/each}
+    </div>
+  {/if}
+  {#if showUploadPlaylistPicker}
+    <div class="upload-playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir canciones al subir">
+      <div class="sheet-heading">
+        <strong>Añadir las {pendingUploadFiles.length} canciones a playlists</strong>
+        <button onclick={() => { showUploadPlaylistPicker = false; pendingUploadFiles = []; }}>×</button>
+      </div>
+      <form onsubmit={(event) => { event.preventDefault(); confirmUploadPlaylist(); }}>
+        <input bind:value={uploadNewPlaylistName} placeholder="Crear una nueva playlist" maxlength="200" />
+        <div class="upload-playlist-options">
+          {#each playlists as playlist}
+            <label>
+              <input
+                type="checkbox"
+                checked={uploadPlaylistIds.includes(playlist.id)}
+                onchange={() => toggleUploadPlaylist(playlist.id)}
+              />
+              <span>{playlist.name}</span>
+            </label>
+          {/each}
+        </div>
+        <button type="submit">Subir y añadir</button>
+      </form>
     </div>
   {/if}
 {/if}
