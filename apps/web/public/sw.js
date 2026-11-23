@@ -1,5 +1,5 @@
-const CACHE = "auralith-app-shell-v4";
-const IMAGE_CACHE = "auralith-images-v1";
+const CACHE = "auralith-app-shell-v5";
+const IMAGE_CACHE = "auralith-images-v2";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",

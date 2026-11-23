@@ -734,8 +734,13 @@ def track_cover(
             media_type=media_type,
             headers={"Cache-Control": "private, max-age=86400"},
         )
+    except (FileNotFoundError, KeyError):
+        raise HTTPException(status_code=404, detail="Cover not found")
     except Exception as error:
-        raise HTTPException(status_code=404, detail="Cover not found") from error
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            raise HTTPException(status_code=404, detail="Cover not found") from error
+        raise HTTPException(status_code=503, detail="Cover temporarily unavailable") from error
 
 
 @app.get("/api/search")

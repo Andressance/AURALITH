@@ -79,6 +79,10 @@
     return value ? value.slice(0, 1).toUpperCase() : "♫";
   }
 
+  function hideBrokenImage(event) {
+    event.currentTarget.style.display = "none";
+  }
+
   async function api(path, options = {}) {
     if (!API_BASE) {
       throw new Error("VITE_API_URL is not configured in Vercel");
@@ -729,7 +733,7 @@
         <section class="playlist-hero">
           <div class="hero-cover">
             {#if selectedPlaylist.cover_url}
-              <img src={assetUrl(selectedPlaylist.cover_url)} alt="" fetchpriority="low" loading="lazy" decoding="async" />
+              <img src={assetUrl(selectedPlaylist.cover_url)} alt="" fetchpriority="low" loading="lazy" decoding="async" onerror={hideBrokenImage} />
             {:else}
               ♫
             {/if}
@@ -751,7 +755,7 @@
             </article>
           {/each}
         </section>
-      {:else}
+      {:else if activeView === "library"}
         <section class="library-header">
           <div><span>Tu música</span><h2>Made for you</h2></div>
           <label class="primary-upload" class:disabled={uploading}>Subir canciones<input type="file" multiple accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} disabled={uploading} /></label>
@@ -769,7 +773,7 @@
               </label>
               <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
                 {#if track.cover_url}
-                  <img src={assetUrl(track.cover_url)} alt="" loading="lazy" decoding="async" />
+                  <img src={assetUrl(track.cover_url)} alt="" loading="lazy" decoding="async" onerror={hideBrokenImage} />
                 {:else}
                   <span>{titleInitial(track.title)}</span>
                 {/if}
@@ -792,7 +796,7 @@
         <div class="now-playing">
           <div class="mini-cover">
             {#if currentTrack.cover_url}
-              <img src={assetUrl(currentTrack.cover_url)} alt="" />
+              <img src={assetUrl(currentTrack.cover_url)} alt="" onerror={hideBrokenImage} />
             {:else}
               ♫
             {/if}

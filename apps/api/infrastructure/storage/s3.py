@@ -2,6 +2,8 @@ import os
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+import time
 
 
 class S3StorageProvider:
@@ -75,8 +77,17 @@ class S3StorageProvider:
         kwargs = {"Bucket": self.bucket, "Key": key}
         if start is not None and end is not None:
             kwargs["Range"] = f"bytes={start}-{end}"
-        response = self.client.get_object(**kwargs)
-        return response["Body"]
+        for attempt in range(3):
+            try:
+                response = self.client.get_object(**kwargs)
+                return response["Body"]
+            except (BotoCoreError, ClientError) as error:
+                code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                if code in {"NoSuchKey", "404", "NotFound"}:
+                    raise
+                if attempt == 2:
+                    raise
+                time.sleep(0.15 * (attempt + 1))
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
