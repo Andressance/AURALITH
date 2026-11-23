@@ -55,6 +55,16 @@ Neon can provide both PostgreSQL and S3-compatible object storage:
 - Set `NEON_STORAGE_BUCKET=music`.
 - Set `NEON_ACCESS_KEY_ID` and `NEON_SECRET_ACCESS_KEY`.
 
+The Neon Storage connection panel may show standard AWS names instead:
+
+- `AWS_ENDPOINT_URL_S3`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `AWS_BUCKET_NAME`
+
+Use `AURALITH_STORAGE_PROVIDER=neon`; configure either the `NEON_*` names or these AWS-compatible names in Render. Do not expose the credentials in Vercel or in `VITE_*` variables.
+
 Alternatively, use `AURALITH_STORAGE_PROVIDER=supabase` with Supabase Storage variables.
 
 ### Deployment

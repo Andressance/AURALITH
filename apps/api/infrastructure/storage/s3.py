@@ -17,8 +17,15 @@ class S3StorageProvider:
             endpoint
             or os.getenv("NEON_STORAGE_ENDPOINT", "")
             or os.getenv("NEON_URL", "")
+            or os.getenv("AWS_ENDPOINT_URL_S3", "")
         ).rstrip("/")
-        self.bucket = bucket or os.getenv("NEON_STORAGE_BUCKET", "music")
+        self.bucket = (
+            bucket
+            or os.getenv("NEON_STORAGE_BUCKET", "")
+            or os.getenv("AWS_BUCKET_NAME", "")
+            or os.getenv("AWS_S3_BUCKET", "")
+            or "music"
+        )
         self.access_key = (
             access_key
             or os.getenv("NEON_ACCESS_KEY_ID", "")
@@ -40,7 +47,7 @@ class S3StorageProvider:
             endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            region_name=os.getenv("NEON_STORAGE_REGION", region),
+            region_name=os.getenv("NEON_STORAGE_REGION", os.getenv("AWS_REGION", region)),
             config=Config(s3={"addressing_style": "path"}),
         )
 

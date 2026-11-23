@@ -74,6 +74,21 @@ def test_s3_provider_accepts_neon_environment(monkeypatch):
     assert provider.bucket == "music"
 
 
+def test_s3_provider_accepts_aws_named_neon_environment(monkeypatch):
+    from apps.api.infrastructure.storage.s3 import S3StorageProvider
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL_S3", "https://storage.example.com")
+    monkeypatch.setenv("AWS_BUCKET_NAME", "music")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+    provider = S3StorageProvider()
+
+    assert provider.endpoint == "https://storage.example.com"
+    assert provider.bucket == "music"
+
+
 def test_password_policy_rejects_weak_defaults():
     assert not is_strong_owner_password("change-me")
     assert not is_strong_owner_password("ChangeMe123456")
