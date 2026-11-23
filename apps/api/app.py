@@ -228,10 +228,15 @@ def token_hash(token: str) -> str:
 def current_user(
     db: Annotated[Session, Depends(db_session)],
     auralith_session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ):
-    if not auralith_session:
+    bearer_token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer_token = authorization[7:].strip()
+    token = bearer_token or auralith_session
+    if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    digest = token_hash(auralith_session)
+    digest = token_hash(token)
     session = db.scalar(select(Session).where(Session.token_hash == digest))
     now = datetime.now(timezone.utc)
     expires_at = normalize_utc(session.expires_at) if session else now
@@ -280,7 +285,7 @@ def login(request: Request, payload: dict, db: Annotated[Session, Depends(db_ses
     expires = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=12)
     db.add(Session(user_id=user.id, token_hash=token_hash(token), expires_at=expires))
     db.commit()
-    response = JSONResponse({"ok": True})
+    response = JSONResponse({"ok": True, "token": token})
     response.set_cookie(
         "auralith_session",
         token,
@@ -441,9 +446,9 @@ async def upload_track(
 def track_to_dict(track: Track):
     return {
         "id": track.id,
-        "title": track.title,
-        "artist": track.artist,
-        "album": track.album,
+        "title": str(track.title) if track.title is not None else "Canción sin título",
+        "artist": str(track.artist) if track.artist is not None else None,
+        "album": str(track.album) if track.album is not None else None,
         "year": track.year,
         "genre": track.genre,
         "duration": track.duration,

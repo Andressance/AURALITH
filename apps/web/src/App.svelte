@@ -20,7 +20,17 @@
   let visibleTracks = [];
   let selectedPlaylistId = null;
   let selectedPlaylist = null;
+  let sessionToken = localStorage.getItem("auralith_session_token") || "";
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+  function text(value, fallback = "") {
+    return typeof value === "string" ? value : fallback;
+  }
+
+  function titleInitial(title) {
+    const value = text(title).trim();
+    return value ? value.slice(0, 1).toUpperCase() : "♫";
+  }
 
   async function api(path, options = {}) {
     if (!API_BASE) {
@@ -28,7 +38,18 @@
     }
     let response;
     try {
-      response = await fetch(`${API_BASE}${path}`, { ...options, credentials: "include" });
+      const headers = new Headers(options.headers || {});
+      if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
+      response = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers,
+        credentials: "include"
+      });
+      if (response.status === 401) {
+        sessionToken = "";
+        localStorage.removeItem("auralith_session_token");
+        authenticated = false;
+      }
     } catch {
       throw new Error(`Unable to reach API: ${API_BASE}`);
     }
@@ -43,11 +64,15 @@
     event.preventDefault();
     error = "";
     try {
-      await api("/api/auth/login", {
+      const result = await api("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password })
       });
+      if (result.token) {
+        sessionToken = result.token;
+        localStorage.setItem("auralith_session_token", result.token);
+      }
       await load();
     } catch (cause) {
       error = cause.message;
@@ -176,6 +201,8 @@
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
+    sessionToken = "";
+    localStorage.removeItem("auralith_session_token");
     authenticated = false;
   }
 
@@ -335,7 +362,7 @@
             <article class:playing={currentTrack?.id === track.id}>
               <span class="track-index">{index + 1}</span>
               <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
-              <div><strong>{track.title}</strong><span>{track.artist || "Artista desconocido"}</span></div>
+              <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
               <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
             </article>
           {/each}
@@ -348,12 +375,12 @@
         <section class="track-grid">
           {#each visibleTracks as track}
             <article class:playing={currentTrack?.id === track.id}>
-              <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${track.title}`}>
-                <span>{track.title.slice(0, 1).toUpper()}</span>
+              <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
+                <span>{titleInitial(track.title)}</span>
                 <b>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</b>
               </button>
-              <strong>{track.title}</strong>
-              <span>{track.artist || "Artista desconocido"}</span>
+              <strong>{text(track.title, "Canción sin título")}</strong>
+              <span>{text(track.artist, "Artista desconocido")}</span>
               <div class="track-actions">
                 <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
                 <button onclick={() => deleteTrack(track)} aria-label="Eliminar" title="Eliminar">×</button>
@@ -368,7 +395,7 @@
       <footer class="player">
         <div class="now-playing">
           <div class="mini-cover">♫</div>
-          <div><strong>{currentTrack.title}</strong><span>{currentTrack.artist || "Artista desconocido"}</span></div>
+          <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
         </div>
         <div class="player-center">
           <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>

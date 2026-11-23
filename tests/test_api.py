@@ -52,6 +52,20 @@ def test_login_and_owner_profile():
     assert response.json()["role"] == "owner"
 
 
+def test_bearer_session_authentication():
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "owner", "password": "TestPassword123!"},
+    )
+    token = response.json()["token"]
+    authenticated = client.get(
+        "/api/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert authenticated.status_code == 200
+    assert authenticated.json()["username"] == "owner"
+
+
 def test_create_playlist_and_favorite():
     login()
     playlist = client.post("/api/playlists", json={"name": "Smoke list"})
