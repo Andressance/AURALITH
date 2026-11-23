@@ -138,6 +138,13 @@ class Favorite(Base):
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
 
 
+class HiddenTrack(Base):
+    __tablename__ = "hidden_tracks"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+
+
 class Invitation(Base):
     __tablename__ = "invitations"
     id = Column(Integer, primary_key=True)
@@ -520,6 +527,7 @@ def delete_guest(
             PlaylistTrack.playlist_id.in_(playlist_ids)
         ).delete(synchronize_session=False)
     db.query(Favorite).filter(Favorite.user_id == account.id).delete()
+    db.query(HiddenTrack).filter(HiddenTrack.user_id == account.id).delete()
     db.query(Session).filter(Session.user_id == account.id).delete()
     db.query(Playlist).filter(Playlist.user_id == account.id).delete()
     db.query(Track).filter(Track.user_id == account.id).delete()
@@ -687,9 +695,7 @@ async def upload_track(
         if not (has_id3 or frame_sync):
             raise HTTPException(status_code=400, detail="Invalid MP3 file")
     digest = hashlib.sha256(content).hexdigest()
-    existing = db.scalar(
-        select(Track).where(Track.user_id == user.id, Track.sha256 == digest)
-    )
+    existing = db.scalar(select(Track).where(Track.sha256 == digest))
     if existing:
         return {"id": existing.id, "duplicate": True}
     stored_name = f"{digest}{suffix}"
@@ -788,7 +794,13 @@ def track_to_dict(track: Track):
 
 @app.get("/api/tracks")
 def list_tracks(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
-    tracks = db.scalars(select(Track).where(Track.user_id == user.id).order_by(Track.created_at.desc()))
+    hidden_ids = db.scalars(
+        select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    ).all()
+    statement = select(Track)
+    if hidden_ids:
+        statement = statement.where(Track.id.not_in(hidden_ids))
+    tracks = db.scalars(statement.order_by(Track.created_at.desc()))
     return [track_to_dict(track) for track in tracks]
 
 
@@ -798,7 +810,7 @@ def track_cover(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not track or not getattr(track, "cover_path", None):
         raise HTTPException(status_code=404, detail="Cover not found")
     try:
@@ -829,18 +841,18 @@ def search_tracks(
     if not query:
         return []
     pattern = f"%{query.lower()}%"
-    tracks = db.scalars(
-        select(Track)
-        .where(
-            Track.user_id == user.id,
-            (Track.title.ilike(pattern))
-            | (Track.artist.ilike(pattern))
-            | (Track.album.ilike(pattern))
-            | (Track.genre.ilike(pattern)),
-        )
-        .order_by(Track.title)
-        .limit(100)
+    hidden_ids = db.scalars(
+        select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    ).all()
+    statement = select(Track).where(
+        (Track.title.ilike(pattern))
+        | (Track.artist.ilike(pattern))
+        | (Track.album.ilike(pattern))
+        | (Track.genre.ilike(pattern))
     )
+    if hidden_ids:
+        statement = statement.where(Track.id.not_in(hidden_ids))
+    tracks = db.scalars(statement.order_by(Track.title).limit(100))
     return [track_to_dict(track) for track in tracks]
 
 
@@ -851,7 +863,7 @@ def stream_track(
     user: Annotated[User, Depends(current_user)],
     range_header: Annotated[str | None, Header(alias="Range")] = None,
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     if not storage.exists(track.stored_path):
@@ -940,7 +952,7 @@ def create_playlist(payload: dict, db: Annotated[Session, Depends(db_session)], 
             if isinstance(track_id, int)
         ))
         tracks = db.scalars(
-            select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
+            select(Track).where(Track.id.in_(normalized_ids))
         ).all()
         for position, track in enumerate(tracks):
             db.add(PlaylistTrack(
@@ -971,7 +983,7 @@ def get_playlist(
         .order_by(PlaylistTrack.position)
     )
     track_ids = [entry.track_id for entry in entries]
-    tracks = db.scalars(select(Track).where(Track.id.in_(track_ids), Track.user_id == user.id))
+    tracks = db.scalars(select(Track).where(Track.id.in_(track_ids)))
     tracks_by_id = {track.id: track for track in tracks}
     return {
         "id": playlist.id,
@@ -1032,7 +1044,7 @@ def add_playlist_track(
     user: Annotated[User, Depends(current_user)],
 ):
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not playlist or not track:
         raise HTTPException(status_code=404, detail="Playlist or track not found")
     position = db.query(PlaylistTrack).filter(PlaylistTrack.playlist_id == playlist_id).count()
@@ -1061,7 +1073,7 @@ def add_playlist_tracks(
     if not normalized_ids:
         return {"added": 0}
     tracks = db.scalars(
-        select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
+        select(Track).where(Track.id.in_(normalized_ids))
     ).all()
     existing = set(db.scalars(
         select(PlaylistTrack.track_id).where(
@@ -1114,9 +1126,32 @@ def delete_track(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+    if user.role != "owner":
+        hidden = db.scalar(
+            select(HiddenTrack).where(
+                HiddenTrack.user_id == user.id,
+                HiddenTrack.track_id == track_id,
+            )
+        )
+        if not hidden:
+            db.add(HiddenTrack(user_id=user.id, track_id=track_id))
+            db.query(Favorite).filter(
+                Favorite.user_id == user.id,
+                Favorite.track_id == track_id,
+            ).delete()
+            guest_playlist_ids = db.scalars(
+                select(Playlist.id).where(Playlist.user_id == user.id)
+            ).all()
+            if guest_playlist_ids:
+                db.query(PlaylistTrack).filter(
+                    PlaylistTrack.playlist_id.in_(guest_playlist_ids),
+                    PlaylistTrack.track_id == track_id,
+                ).delete(synchronize_session=False)
+            db.commit()
+        return {"ok": True, "hidden": True}
     storage.delete(track.stored_path)
     db.query(PlaylistTrack).filter(PlaylistTrack.track_id == track_id).delete()
     db.query(Favorite).filter(Favorite.track_id == track_id).delete()
@@ -1127,7 +1162,7 @@ def delete_track(
 
 @app.post("/api/favorites/{track_id}")
 def add_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     exists = db.scalar(select(Favorite).where(Favorite.user_id == user.id, Favorite.track_id == track_id))
@@ -1140,7 +1175,7 @@ def add_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], use
 @app.get("/api/favorites")
 def list_favorites(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     ids = db.scalars(select(Favorite.track_id).where(Favorite.user_id == user.id))
-    tracks = db.scalars(select(Track).where(Track.id.in_(list(ids)), Track.user_id == user.id))
+    tracks = db.scalars(select(Track).where(Track.id.in_(list(ids))))
     return [track_to_dict(track) for track in tracks]
 
 

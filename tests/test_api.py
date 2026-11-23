@@ -187,6 +187,57 @@ def test_owner_can_create_activate_revoke_and_delete_guest():
     assert deleted.status_code == 200
 
 
+def test_guest_sees_owner_tracks_but_can_only_hide_them():
+    login()
+    key = "shared-track.mp3"
+    storage.upload(key, b"shared-track", "audio/mpeg")
+    from apps.api.app import User
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Shared Horizon",
+            sha256="shared-horizon",
+            file_name="shared.mp3",
+            stored_path=key,
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Shared guest"})
+    code = invitation.json()["code"]
+    assert client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "sharedguest",
+            "display_name": "Shared guest",
+            "password": "GuestPassword123!",
+        },
+    ).status_code == 200
+
+    guest_client = TestClient(app)
+    assert guest_client.post(
+        "/api/auth/login",
+        json={"username": "sharedguest", "password": "GuestPassword123!"},
+    ).status_code == 200
+
+    tracks = guest_client.get("/api/tracks")
+    assert tracks.status_code == 200
+    assert any(track["id"] == track_id for track in tracks.json())
+
+    hidden = guest_client.delete(f"/api/tracks/{track_id}")
+    assert hidden.status_code == 200
+    assert hidden.json()["hidden"] is True
+    assert not any(track["id"] == track_id for track in guest_client.get("/api/tracks").json())
+
+    owner_tracks = client.get("/api/tracks")
+    assert owner_tracks.status_code == 200
+    assert any(track["id"] == track_id for track in owner_tracks.json())
+    assert storage.exists(key)
+
+
 def test_guest_cannot_access_owner_management():
     invitation = client.post("/api/owner/invitations", json={"display_name": "Guest"})
     assert invitation.status_code == 200
