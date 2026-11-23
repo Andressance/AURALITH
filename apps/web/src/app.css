@@ -400,6 +400,90 @@ button { cursor: pointer; }
   padding-top: 6px;
 }
 .profile-actions button { border: 0; border-radius: 999px; padding: 11px 17px; font-weight: 800; }
+.user-management {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 18px 20px;
+  border: 1px solid #2d263f;
+  border-radius: 12px;
+  background: rgba(24,20,33,.78);
+}
+.user-management-heading h2 { margin: 4px 0 2px; font-size: 26px; }
+.user-management-heading > div > span { color: #b9b1cc; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }
+.user-management-heading p { margin: 0; color: #9f98b1; font-size: 13px; }
+.invitation-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.invitation-form input {
+  min-width: 0;
+  border: 1px solid #3a334b;
+  border-radius: 9px;
+  padding: 11px 13px;
+  background: #17131f;
+  color: #fff;
+}
+.invitation-form button,
+.invitation-link button,
+.pending-invitations article button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: #8b5cf6;
+  color: #fff;
+  font-weight: 800;
+}
+.invitation-link {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #4a3b68;
+  border-radius: 9px;
+  background: #211a30;
+}
+.invitation-link div { min-width: 0; display: grid; gap: 3px; }
+.invitation-link span { color: #b9b1cc; font-size: 11px; }
+.invitation-link strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-list { display: grid; gap: 6px; }
+.user-list article,
+.pending-invitations article {
+  display: grid;
+  grid-template-columns: 42px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: #17131f;
+}
+.user-avatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4c1d95, #8b5cf6);
+  font-weight: 850;
+}
+.user-details { display: grid; }
+.user-details span,
+.pending-invitations article span { color: #9f98b1; font-size: 12px; }
+.user-list article > button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: #4a2028;
+  color: #ffb1bd;
+}
+.pending-invitations {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
+.pending-invitations article { grid-template-columns: 1fr auto; }
+.pending-invitations article div { display: grid; }
+.pending-invitations article button { background: #303030; }
 .profile-cancel { background: #282337; color: #ddd8ea; }
 .profile-save { background: #8b5cf6; color: #fff; box-shadow: 0 10px 24px rgba(139,92,246,.18); }
 .profile-account-actions {

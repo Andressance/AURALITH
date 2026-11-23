@@ -452,6 +452,82 @@ def create_invitation(
     }
 
 
+@app.get("/api/owner/users")
+def list_users(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    users = db.scalars(select(User).order_by(User.id)).all()
+    return [
+        {
+            "id": account.id,
+            "username": account.username,
+            "display_name": getattr(account, "display_name", None) or account.username,
+            "role": account.role,
+            "is_owner": account.role == "owner",
+        }
+        for account in users
+    ]
+
+
+@app.delete("/api/owner/invitations/{invitation_id}")
+def revoke_invitation(
+    invitation_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    invitation = db.get(Invitation, invitation_id)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    db.delete(invitation)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/owner/users/{account_id}")
+def delete_guest(
+    account_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    account = db.get(User, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.role == "owner":
+        raise HTTPException(status_code=400, detail="The owner account cannot be deleted")
+
+    tracks = db.scalars(select(Track).where(Track.user_id == account.id)).all()
+    for track in tracks:
+        storage.delete(track.stored_path)
+        if getattr(track, "cover_path", None):
+            storage.delete(track.cover_path)
+
+    if tracks:
+        track_ids = [track.id for track in tracks]
+        db.query(PlaylistTrack).filter(
+            PlaylistTrack.track_id.in_(track_ids)
+        ).delete(synchronize_session=False)
+
+    guest_playlists = db.scalars(
+        select(Playlist).where(Playlist.user_id == account.id)
+    ).all()
+    if guest_playlists:
+        playlist_ids = [playlist.id for playlist in guest_playlists]
+        db.query(PlaylistTrack).filter(
+            PlaylistTrack.playlist_id.in_(playlist_ids)
+        ).delete(synchronize_session=False)
+    db.query(Favorite).filter(Favorite.user_id == account.id).delete()
+    db.query(Session).filter(Session.user_id == account.id).delete()
+    db.query(Playlist).filter(Playlist.user_id == account.id).delete()
+    db.query(Track).filter(Track.user_id == account.id).delete()
+    db.delete(account)
+    db.commit()
+    return {"ok": True}
+
+
 @app.post("/api/invitations/{code}/activate")
 def activate_invitation(
     code: str,

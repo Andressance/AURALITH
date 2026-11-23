@@ -42,6 +42,16 @@
   let pendingUploadFiles = [];
   let uploadPlaylistIds = [];
   let uploadNewPlaylistName = "";
+  let ownerUsers = [];
+  let ownerInvitations = [];
+  let invitationName = "";
+  let invitationCode = "";
+  let inviteCode = window.location.pathname.startsWith("/invite/")
+    ? window.location.pathname.split("/invite/")[1]
+    : "";
+  let inviteUsername = "";
+  let invitePassword = "";
+  let inviteDisplayName = "";
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function viewFromPath() {
@@ -121,8 +131,31 @@
     return response.status === 204 ? null : response.json();
   }
 
-  async function login(event) {
+  async function activateInvite(event) {
     event.preventDefault();
+    error = "";
+    try {
+      await api(`/api/invitations/${encodeURIComponent(inviteCode)}/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: inviteUsername,
+          password: invitePassword,
+          display_name: inviteDisplayName
+        })
+      });
+      history.replaceState({}, "", "/");
+      inviteCode = "";
+      username = inviteUsername;
+      password = invitePassword;
+      await login();
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function login(event) {
+    event?.preventDefault();
     error = "";
     try {
       const result = await api("/api/auth/login", {
@@ -146,6 +179,12 @@
     profileUsername = profile.username;
     authenticated = true;
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
+    if (profile.role === "owner") await loadOwnerUsers();
+  }
+
+  async function loadOwnerUsers() {
+    ownerUsers = await api("/api/owner/users");
+    ownerInvitations = await api("/api/owner/invitations");
   }
 
   async function loadTracks() {
@@ -410,6 +449,38 @@
     }
   }
 
+  async function createInvitation(event) {
+    event.preventDefault();
+    try {
+      const invitation = await api("/api/owner/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: invitationName })
+      });
+      invitationCode = invitation.code;
+      invitationName = "";
+      await loadOwnerUsers();
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function copyInvitation() {
+    if (!invitationCode) return;
+    await navigator.clipboard?.writeText(`${window.location.origin}/invite/${invitationCode}`);
+  }
+
+  async function revokeInvitation(invitationId) {
+    await api(`/api/owner/invitations/${invitationId}`, { method: "DELETE" });
+    await loadOwnerUsers();
+  }
+
+  async function deleteGuest(account) {
+    if (!window.confirm(`¿Eliminar la cuenta de ${account.display_name}? Se borrarán también sus canciones y playlists.`)) return;
+    await api(`/api/owner/users/${account.id}`, { method: "DELETE" });
+    await loadOwnerUsers();
+  }
+
   async function uploadPlaylistCover(event) {
     const file = event.target.files?.[0];
     if (!file || !selectedPlaylistId) return;
@@ -624,23 +695,45 @@
 </script>
 
 {#if !authenticated}
-  <main class="login-shell">
-    <form onsubmit={(event) => login(event)}>
-      <h1>Auralith</h1>
-      <p>Your private music cloud.</p>
-      <label>
-        Username
-        <input bind:value={username} autocomplete="username" />
-      </label>
-      <label>
-        Password
-        <input type="password" bind:value={password} autocomplete="current-password" />
-      </label>
-      {#if error}<p class="error">{error}</p>{/if}
-      <button type="submit">Sign in</button>
-    </form>
-  </main>
-
+  {#if inviteCode}
+    <main class="login-shell">
+      <form onsubmit={activateInvite}>
+        <h1>Unirse a Auralith</h1>
+        <p>Crea tu cuenta personal.</p>
+        <label>
+          Nombre visible
+          <input bind:value={inviteDisplayName} maxlength="100" autocomplete="name" />
+        </label>
+        <label>
+          Usuario
+          <input bind:value={inviteUsername} maxlength="63" autocomplete="username" />
+        </label>
+        <label>
+          Contraseña
+          <input type="password" bind:value={invitePassword} autocomplete="new-password" />
+        </label>
+        {#if error}<p class="error">{error}</p>{/if}
+        <button type="submit">Crear cuenta</button>
+      </form>
+    </main>
+  {:else}
+    <main class="login-shell">
+      <form onsubmit={(event) => login(event)}>
+        <h1>Auralith</h1>
+        <p>Your private music cloud.</p>
+        <label>
+          Username
+          <input bind:value={username} autocomplete="username" />
+        </label>
+        <label>
+          Password
+          <input type="password" bind:value={password} autocomplete="current-password" />
+        </label>
+        {#if error}<p class="error">{error}</p>{/if}
+        <button type="submit">Sign in</button>
+      </form>
+    </main>
+  {/if}
 {:else}
   <div class="app-shell" class:player-visible={playerVisible}>
     <aside class="sidebar">
@@ -797,6 +890,60 @@
               </button>
             </div>
           </section>
+          {#if profile?.role === "owner"}
+            <section class="user-management">
+              <div class="user-management-heading">
+                <div>
+                  <span>Administración</span>
+                  <h2>Usuarios</h2>
+                  <p>Crea invitaciones y gestiona las cuentas de esta instancia.</p>
+                </div>
+              </div>
+              <form class="invitation-form" onsubmit={createInvitation}>
+                <input bind:value={invitationName} maxlength="100" placeholder="Nombre del invitado (opcional)" />
+                <button type="submit">Crear invitación</button>
+              </form>
+              {#if invitationCode}
+                <div class="invitation-link">
+                  <div>
+                    <span>Enlace nuevo</span>
+                    <strong>{window.location.origin}/invite/{invitationCode}</strong>
+                  </div>
+                  <button onclick={copyInvitation}>Copiar</button>
+                </div>
+              {/if}
+              <div class="user-list">
+                {#each ownerUsers as account}
+                  <article>
+                    <div class="user-avatar">{account.display_name.slice(0, 1).toUpperCase()}</div>
+                    <div class="user-details">
+                      <strong>{account.display_name}</strong>
+                      <span>@{account.username} · {account.role === "owner" ? "Propietario" : "Invitado"}</span>
+                    </div>
+                    {#if account.role !== "owner"}
+                      <button class="danger" onclick={() => deleteGuest(account)} title="Eliminar cuenta">×</button>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+              {#if ownerInvitations.length}
+                <div class="pending-invitations">
+                  <strong>Invitaciones pendientes</strong>
+                  {#each ownerInvitations as invitation}
+                    {#if !invitation.used}
+                      <article>
+                        <div>
+                          <strong>{invitation.display_name || "Invitado"}</strong>
+                          <span>Caduca {new Date(invitation.expires_at).toLocaleDateString()}</span>
+                        </div>
+                        <button onclick={() => revokeInvitation(invitation.id)} title="Revocar invitación">Revocar</button>
+                      </article>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          {/if}
         </section>
       {:else if activeView === "playlists"}
         <section class="playlist-page">

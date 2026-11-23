@@ -154,6 +154,62 @@ def test_search_and_playlist_track_operations():
     assert client.delete(f"/api/playlists/{playlist_id}/tracks/{track_id}").status_code == 200
 
 
+def test_owner_can_create_activate_revoke_and_delete_guest():
+    login()
+    created = client.post("/api/owner/invitations", json={"display_name": "Invitado prueba"})
+    assert created.status_code == 200
+    invitation = created.json()
+
+    activated = client.post(
+        f"/api/invitations/{invitation['code']}/activate",
+        json={
+            "username": "guest1",
+            "display_name": "Invitado prueba",
+            "password": "GuestPassword123!",
+        },
+    )
+    assert activated.status_code == 200
+    assert activated.json()["role"] == "guest"
+
+    users = client.get("/api/owner/users")
+    assert users.status_code == 200
+    guest = next(account for account in users.json() if account["username"] == "guest1")
+
+    guest_client = TestClient(app)
+    guest_login = guest_client.post(
+        "/api/auth/login",
+        json={"username": "guest1", "password": "GuestPassword123!"},
+    )
+    assert guest_login.status_code == 200
+
+    assert guest_client.post("/api/playlists", json={"name": "Guest list"}).status_code == 200
+    deleted = client.delete(f"/api/owner/users/{guest['id']}")
+    assert deleted.status_code == 200
+
+
+def test_guest_cannot_access_owner_management():
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Guest"})
+    assert invitation.status_code == 200
+    code = invitation.json()["code"]
+    activated = client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "guest2",
+            "display_name": "Guest",
+            "password": "GuestPassword123!",
+        },
+    )
+    assert activated.status_code == 200
+
+    guest_client = TestClient(app)
+    guest_client.post(
+        "/api/auth/login",
+        json={"username": "guest2", "password": "GuestPassword123!"},
+    )
+    assert guest_client.get("/api/owner/users").status_code == 403
+    assert guest_client.get("/api/owner/invitations").status_code == 403
+
+
 def test_invalid_password_is_rejected():
     login_rate_limiter_reset()
     response = client.post(
