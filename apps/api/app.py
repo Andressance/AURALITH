@@ -20,14 +20,24 @@ from mutagen import File as MutagenFile
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import DeclarativeBase, Session
 
-from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
-from apps.api.infrastructure.storage.local import LocalStorageProvider
-from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
-from apps.api.core.security import (
-    build_allowed_origins,
-    is_strong_owner_password,
-    login_rate_limiter,
-)
+try:
+    from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
+    from apps.api.infrastructure.storage.local import LocalStorageProvider
+    from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
+    from apps.api.core.security import (
+        build_allowed_origins,
+        is_strong_owner_password,
+        login_rate_limiter,
+    )
+except ModuleNotFoundError:
+    from infrastructure.database import SQLAlchemyDatabaseProvider
+    from infrastructure.storage.local import LocalStorageProvider
+    from infrastructure.storage.supabase import SupabaseStorageProvider
+    from core.security import (
+        build_allowed_origins,
+        is_strong_owner_password,
+        login_rate_limiter,
+    )
 
 
 BASE_DIR = Path(os.getenv("AURALITH_DATA_DIR", "./data")).resolve()
