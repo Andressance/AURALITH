@@ -239,6 +239,11 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/health")
+def health_alias():
+    return {"status": "ok"}
+
+
 @app.post("/api/auth/login")
 def login(request: Request, payload: dict, db: Annotated[Session, Depends(db_session)]):
     username = str(payload.get("username", ""))[:128]
