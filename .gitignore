@@ -6,3 +6,6 @@ data/
 dist/
 node_modules/
 auralith.egg-info/
+.env
+.env.*
+!.env.example

@@ -19,7 +19,19 @@ services:
       - key: AURALITH_RESET_OWNER_PASSWORD
         value: "false"
       - key: AURALITH_STORAGE_PROVIDER
-        value: supabase
+        value: neon
+      - key: AWS_ENDPOINT_URL_S3
+        sync: false
+      - key: AWS_BUCKET_NAME
+        value: music
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_SESSION_TOKEN
+        sync: false
+      - key: AWS_REGION
+        value: us-east-1
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_SECRET_KEY

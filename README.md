@@ -62,6 +62,7 @@ The Neon Storage connection panel may show standard AWS names instead:
 - `AWS_SECRET_ACCESS_KEY`
 - `AWS_REGION`
 - `AWS_BUCKET_NAME`
+- `AWS_SESSION_TOKEN` if the object-storage provider issues temporary credentials
 
 Use `AURALITH_STORAGE_PROVIDER=neon`; configure either the `NEON_*` names or these AWS-compatible names in Render. Do not expose the credentials in Vercel or in `VITE_*` variables.
 

@@ -9,6 +9,10 @@
   let error = "";
   let audio;
   let currentTrack;
+  let isPlaying = false;
+  let progress = 0;
+  let duration = 0;
+  let volume = 0.8;
   let searchQuery = "";
   let visibleTracks = [];
   let selectedPlaylistId = null;
@@ -155,7 +159,38 @@
   }
 
   function play(track) {
+    if (currentTrack?.id === track.id && audio) {
+      if (audio.paused) audio.play();
+      else audio.pause();
+      return;
+    }
     currentTrack = track;
+    progress = 0;
+    duration = 0;
+  }
+
+  function togglePlayback() {
+    if (!audio) return;
+    if (audio.paused) audio.play();
+    else audio.pause();
+  }
+
+  function seek(event) {
+    if (!audio || !duration) return;
+    const next = Number(event.currentTarget.value);
+    audio.currentTime = next;
+    progress = next;
+  }
+
+  function changeVolume(event) {
+    volume = Number(event.currentTarget.value);
+    if (audio) audio.volume = volume;
+  }
+
+  function formatTime(seconds) {
+    if (!Number.isFinite(seconds)) return "0:00";
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
   }
 
   load().catch(() => {});
@@ -179,80 +214,114 @@
     </form>
   </main>
 {:else}
-  <main class="app-shell">
-    <header>
+  <div class="app-shell">
+    <aside class="sidebar">
       <a class="brand" href="/" aria-label="Auralith">
         <img src="/icon.svg" alt="" />
         <h1>Auralith</h1>
       </a>
-      <div class="header-actions">
-        <label class="upload">Upload MP3 / FLAC<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
-        <button class="secondary" onclick={downloadBackup}>Backup</button>
-        <label class="upload">Restore<input type="file" accept=".zip" onchange={restoreBackup} /></label>
-        <button class="secondary" onclick={logout}>Sign out</button>
-      </div>
-    </header>
-
-    {#if error}<p class="error">{error}</p>{/if}
-
-    <section>
-      <h2>Library</h2>
-      <input class="search" bind:value={searchQuery} oninput={search} placeholder="Search title, artist, album or genre" />
-      <div class="track-list">
-        {#each visibleTracks as track}
-          <article>
-            <button onclick={() => play(track)}>▶</button>
-            <div>
-              <strong>{track.title}</strong>
-              <span>{track.artist || "Unknown artist"} · {track.album || "Unknown album"}</span>
-            </div>
-            <div class="track-actions">
-              <button onclick={() => addToSelectedPlaylist(track)} aria-label="Add to selected playlist" title="Add to selected playlist">＋</button>
-              <button onclick={() => favorite(track)} aria-label="Favorite" title="Favorite">♥</button>
-              <button onclick={() => deleteTrack(track)} aria-label="Delete" title="Delete">×</button>
-            </div>
-          </article>
-        {/each}
-      </div>
-    </section>
-
-    <aside>
-      <h2>Playlists</h2>
-      <div class="playlist-create">
-        <input bind:value={playlistName} placeholder="Playlist name" />
-        <button onclick={createPlaylist}>Create</button>
-      </div>
-      {#each playlists as playlist}
-        <button class="playlist-item" onclick={() => selectPlaylist(playlist)}>{playlist.name}</button>
-      {/each}
-      {#if selectedPlaylist}
-        <h3>{selectedPlaylist.name}</h3>
-        {#each selectedPlaylist.tracks as track}
-          <div class="compact-track">
-            <button onclick={() => play(track)}>▶</button>
-            <span>{track.title}</span>
-            <button onclick={() => removeFromPlaylist(track)}>×</button>
-          </div>
-        {/each}
-      {/if}
-
-      <h2>Favorites</h2>
-      {#each favorites as track}
-        <div class="compact-track">
-          <button onclick={() => play(track)}>▶</button>
-          <span>{track.title}</span>
-          <button onclick={() => unfavorite(track)}>×</button>
+      <nav>
+        <button class="nav-item active" onclick={() => { visibleTracks = tracks; }}>⌂ <span>Inicio</span></button>
+        <button class="nav-item" onclick={() => { searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
+      </nav>
+      <div class="sidebar-library">
+        <div class="sidebar-heading">
+          <h2>Tu biblioteca</h2>
+          <label class="icon-upload" title="Subir música">＋<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
         </div>
-      {/each}
+        <div class="playlist-create">
+          <input bind:value={playlistName} placeholder="Nueva playlist" />
+          <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
+        </div>
+        {#each playlists as playlist}
+          <button class="playlist-item" class:selected={selectedPlaylistId === playlist.id} onclick={() => selectPlaylist(playlist)}>
+            <span class="playlist-cover">♫</span>
+            <span><strong>{playlist.name}</strong><small>Playlist</small></span>
+          </button>
+        {/each}
+      </div>
+      <div class="sidebar-footer">
+        <button onclick={downloadBackup}>Copia de seguridad</button>
+        <label>Restaurar<input type="file" accept=".zip" onchange={restoreBackup} /></label>
+        <button onclick={logout}>Cerrar sesión</button>
+      </div>
     </aside>
+
+    <main class="main-panel">
+      {#if error}<p class="error">{error}</p>{/if}
+      <header class="topbar">
+        <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
+      </header>
+
+      {#if selectedPlaylist}
+        <section class="playlist-hero">
+          <div class="hero-cover">♫</div>
+          <div>
+            <span>Playlist</span>
+            <h2>{selectedPlaylist.name}</h2>
+            <p>Auralith · {selectedPlaylist.tracks.length} canciones</p>
+          </div>
+        </section>
+        <section class="track-list playlist-tracks">
+          {#each selectedPlaylist.tracks as track, index}
+            <article class:playing={currentTrack?.id === track.id}>
+              <span class="track-index">{index + 1}</span>
+              <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
+              <div><strong>{track.title}</strong><span>{track.artist || "Artista desconocido"}</span></div>
+              <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
+            </article>
+          {/each}
+        </section>
+      {:else}
+        <section class="library-header">
+          <div><span>Tu música</span><h2>Made for you</h2></div>
+          <label class="primary-upload">Subir canción<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
+        </section>
+        <section class="track-grid">
+          {#each visibleTracks as track}
+            <article class:playing={currentTrack?.id === track.id}>
+              <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${track.title}`}>
+                <span>{track.title.slice(0, 1).toUpper()}</span>
+                <b>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</b>
+              </button>
+              <strong>{track.title}</strong>
+              <span>{track.artist || "Artista desconocido"}</span>
+              <div class="track-actions">
+                <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
+                <button onclick={() => deleteTrack(track)} aria-label="Eliminar" title="Eliminar">×</button>
+              </div>
+            </article>
+          {/each}
+        </section>
+      {/if}
+    </main>
+
     {#if currentTrack}
       <footer class="player">
-        <div>
-          <strong>{currentTrack.title}</strong>
-          <span>{currentTrack.artist || "Unknown artist"}</span>
+        <div class="now-playing">
+          <div class="mini-cover">♫</div>
+          <div><strong>{currentTrack.title}</strong><span>{currentTrack.artist || "Artista desconocido"}</span></div>
         </div>
-        <audio controls autoplay src={`/api/tracks/${currentTrack.id}/stream`}></audio>
+        <div class="player-center">
+          <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
+          <div class="timeline">
+            <span>{formatTime(progress)}</span>
+            <input aria-label="Posición" type="range" min="0" max={duration || 0} value={progress} oninput={seek} />
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
+        <input class="volume" aria-label="Volumen" type="range" min="0" max="1" step="0.05" value={volume} oninput={changeVolume} />
+        <audio
+          bind:this={audio}
+          autoplay
+          src={`${API_BASE}/api/tracks/${currentTrack.id}/stream`}
+          onplay={() => isPlaying = true}
+          onpause={() => isPlaying = false}
+          ontimeupdate={(event) => progress = event.currentTarget.currentTime}
+          onloadedmetadata={(event) => duration = event.currentTarget.duration}
+          onvolumechange={(event) => volume = event.currentTarget.volume}
+        ></audio>
       </footer>
     {/if}
-  </main>
+  </div>
 {/if}

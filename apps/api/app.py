@@ -189,6 +189,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=sorted(ALLOWED_ORIGINS),
     allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
@@ -372,7 +373,19 @@ async def upload_track(
     if existing:
         return {"id": existing.id, "duplicate": True}
     stored_name = f"{digest}{suffix}"
-    stored_key = storage.upload(stored_name, content, ALLOWED_SUFFIXES[suffix])
+    try:
+        stored_key = storage.upload(stored_name, content, ALLOWED_SUFFIXES[suffix])
+    except Exception as error:
+        code = getattr(error, "response", {}).get("Error", {}).get("Code")
+        if code in {"401", "403", "InvalidAccessKeyId", "SignatureDoesNotMatch"}:
+            raise HTTPException(
+                status_code=502,
+                detail="Object storage authentication failed",
+            ) from error
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to store uploaded audio",
+        ) from error
     try:
         with storage.open(stored_key) as source:
             import tempfile
