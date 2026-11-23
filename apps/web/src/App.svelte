@@ -1,4 +1,6 @@
 <script>
+  import { tick } from "svelte";
+
   let authenticated = false;
   let username = "owner";
   let password = "";
@@ -440,7 +442,7 @@
     }
   }
 
-  function play(track) {
+  async function play(track) {
     if (!playbackQueue.some((item) => item.id === track.id)) {
       playbackQueue = selectedPlaylist?.tracks?.length
         ? selectedPlaylist.tracks
@@ -462,6 +464,15 @@
     progress = 0;
     duration = 0;
     updateMediaSession(track);
+    await tick();
+    if (audio) {
+      audio.load();
+      try {
+        await audio.play();
+      } catch {
+        isPlaying = false;
+      }
+    }
   }
 
   function togglePlayback() {
