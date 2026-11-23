@@ -143,6 +143,19 @@ def test_cross_origin_mutation_is_rejected():
     assert response.status_code == 403
 
 
+def test_cross_origin_upload_error_has_cors_headers():
+    login()
+    origin = "https://auralith-smoky.vercel.app"
+    response = client.post(
+        "/api/tracks",
+        files={"file": ("track.wav", b"RIFF", "audio/wav")},
+        headers={"Origin": origin},
+    )
+    assert response.status_code == 400
+    assert response.headers["Access-Control-Allow-Origin"] == origin
+    assert response.headers["Access-Control-Allow-Credentials"] == "true"
+
+
 def test_security_headers_are_present():
     response = client.get("/api/health")
     assert response.headers["X-Content-Type-Options"] == "nosniff"

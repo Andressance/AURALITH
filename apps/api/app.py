@@ -192,7 +192,7 @@ app.add_middleware(
     allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*vercel\.app",
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Authorization", "Content-Type", "Range"],
+    allow_headers=["*"],
 )
 
 
@@ -204,6 +204,11 @@ async def security_middleware(request: Request, call_next):
             if not is_allowed_origin(origin, ALLOWED_ORIGINS):
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
     response = await call_next(request)
+    origin = request.headers.get("origin")
+    if origin and is_allowed_origin(origin, ALLOWED_ORIGINS):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
