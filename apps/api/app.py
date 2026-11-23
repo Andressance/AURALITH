@@ -553,7 +553,11 @@ def image_response(path: str | None, not_found: str):
         suffix = Path(path).suffix.lower()
         media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
         source = storage.open(path)
-        return StreamingResponse(source, media_type=media_type)
+        return StreamingResponse(
+            source,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
     except Exception as error:
         raise HTTPException(status_code=404, detail=not_found) from error
 
@@ -724,7 +728,11 @@ def track_cover(
         source = storage.open(track.cover_path)
         suffix = Path(track.cover_path).suffix.lower()
         media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
-        return StreamingResponse(source, media_type=media_type)
+        return StreamingResponse(
+            source,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
     except Exception as error:
         raise HTTPException(status_code=404, detail="Cover not found") from error
 
