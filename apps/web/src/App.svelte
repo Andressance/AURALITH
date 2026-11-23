@@ -16,7 +16,15 @@
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   async function api(path, options = {}) {
-    const response = await fetch(`${API_BASE}${path}`, { ...options, credentials: "include" });
+    if (!API_BASE) {
+      throw new Error("VITE_API_URL is not configured in Vercel");
+    }
+    let response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, { ...options, credentials: "include" });
+    } catch {
+      throw new Error(`Unable to reach API: ${API_BASE}`);
+    }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
       throw new Error(body.detail || "Request failed");

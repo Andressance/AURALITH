@@ -195,9 +195,6 @@ async def security_middleware(request: Request, call_next):
         if origin:
             if origin.rstrip("/") not in ALLOWED_ORIGINS:
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
-        fetch_site = request.headers.get("sec-fetch-site")
-        if fetch_site == "cross-site":
-            return JSONResponse(status_code=403, content={"detail": "Cross-site mutation rejected"})
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
