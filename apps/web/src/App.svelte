@@ -28,6 +28,7 @@
   let showPlaylistPicker = false;
   let newPlaylistName = "";
   let activeView = "library";
+  let playerVisible = false;
   let pullDistance = 0;
   let pullStart = 0;
   let pulling = false;
@@ -327,11 +328,16 @@
 
   function play(track) {
     if (currentTrack?.id === track.id && audio) {
-      if (audio.paused) audio.play();
-      else audio.pause();
+      if (audio.paused) {
+        audio.play();
+        playerVisible = true;
+      } else {
+        audio.pause();
+      }
       return;
     }
     currentTrack = track;
+    playerVisible = true;
     progress = 0;
     duration = 0;
     updateMediaSession(track);
@@ -339,8 +345,12 @@
 
   function togglePlayback() {
     if (!audio) return;
-    if (audio.paused) audio.play();
-    else audio.pause();
+    if (audio.paused) {
+      audio.play();
+      playerVisible = true;
+    } else {
+      audio.pause();
+    }
   }
 
   function seek(event) {
@@ -455,7 +465,7 @@
         <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
           {#if playlist.cover_url}
             <img src={assetUrl(playlist.cover_url)} alt="" />
-          {:else}
+          {:else if activeView === "library"}
             <span>♫</span>
           {/if}
           <strong>{playlist.name}</strong>
@@ -536,20 +546,47 @@
       {#if error}<p class="error">{error}</p>{/if}
       {#if activeView === "profile"}
         <section class="profile-page">
-          <button class="page-back" onclick={() => activeView = "library"}>← Biblioteca</button>
-          <h2>Tu perfil</h2>
-          <div class="profile-avatar">
-            {#if profile?.avatar_url}
-              <img src={assetUrl(profile.avatar_url)} alt="" />
-            {:else}
-              <span>{profileName.slice(0, 1).toUpperCase()}</span>
-            {/if}
-            <label>Foto de perfil<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadProfileAvatar} /></label>
+          <button class="page-back" onclick={() => activeView = "library"}><span>←</span> Volver a la biblioteca</button>
+          <div class="profile-hero">
+            <div class="profile-avatar-large">
+              {#if profile?.avatar_url}
+                <img src={assetUrl(profile.avatar_url)} alt="" />
+              {:else}
+                <span>{profileName.slice(0, 1).toUpperCase()}</span>
+              {/if}
+              <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadProfileAvatar} /></label>
+            </div>
+            <div class="profile-heading">
+              <span>Perfil</span>
+              <h2>{profileName}</h2>
+              <p>@{profileUsername} · {profile?.role === "owner" ? "Propietario" : "Invitado"}</p>
+            </div>
           </div>
-          <form onsubmit={saveProfile}>
-            <label>Nombre visible<input bind:value={profileName} maxlength="100" /></label>
-            <label>Usuario<input bind:value={profileUsername} maxlength="63" autocomplete="username" /></label>
-            <button type="submit">Guardar perfil</button>
+          <form class="profile-form" onsubmit={saveProfile}>
+            <section class="profile-form-section">
+              <div>
+                <span>Detalles públicos</span>
+                <p>Cómo quieres que aparezca tu nombre dentro de Auralith.</p>
+              </div>
+              <label>
+                <span>Nombre visible</span>
+                <input bind:value={profileName} maxlength="100" placeholder="Tu nombre" />
+              </label>
+            </section>
+            <section class="profile-form-section">
+              <div>
+                <span>Cuenta</span>
+                <p>Usuario que utilizas para iniciar sesión.</p>
+              </div>
+              <label>
+                <span>Usuario</span>
+                <input bind:value={profileUsername} maxlength="63" autocomplete="username" />
+              </label>
+            </section>
+            <div class="profile-actions">
+              <button type="button" class="profile-cancel" onclick={() => activeView = "library"}>Cancelar</button>
+              <button type="submit" class="profile-save">Guardar cambios</button>
+            </div>
           </form>
         </section>
       {:else if activeView === "playlists"}
@@ -609,11 +646,13 @@
           </div>
         </section>
       {/if}
-      <header class="topbar">
-        <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
-      </header>
+      {#if activeView === "library"}
+        <header class="topbar">
+          <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
+        </header>
+      {/if}
 
-      {#if selectedPlaylist}
+      {#if activeView === "library" && selectedPlaylist}
         <section class="playlist-hero">
           <div class="hero-cover">
             {#if selectedPlaylist.cover_url}
@@ -675,10 +714,16 @@
       {/if}
     </main>
 
-    {#if currentTrack}
+    {#if currentTrack && playerVisible}
       <footer class="player">
         <div class="now-playing">
-          <div class="mini-cover">♫</div>
+          <div class="mini-cover">
+            {#if currentTrack.cover_url}
+              <img src={assetUrl(currentTrack.cover_url)} alt="" />
+            {:else}
+              ♫
+            {/if}
+          </div>
           <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
         </div>
         <div class="player-center">

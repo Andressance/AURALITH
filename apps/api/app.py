@@ -17,6 +17,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Up
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from mutagen import File as MutagenFile
+from PIL import Image, ImageOps
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import DeclarativeBase, Session
 from sqlalchemy import inspect, text
