@@ -45,6 +45,17 @@ The backend is not coupled to Supabase or to a local installation:
 
 The detailed architecture, security model, roadmap, and future federation design remain in Spanish below.
 
+### Neon database and storage
+
+Neon and Supabase have separate roles:
+
+- Neon provides PostgreSQL. Set `AURALITH_DB_URL` to the Neon connection string.
+- Supabase Storage provides object storage. Set `AURALITH_STORAGE_PROVIDER=supabase`.
+- Set `SUPABASE_URL` to the Supabase project URL.
+- Set `SUPABASE_SECRET_KEY` to the Supabase `Secret key`.
+- Set `SUPABASE_STORAGE_BUCKET=music`.
+- Do not set `AURALITH_STORAGE_PROVIDER=neon`; Neon does not provide this project's audio storage API.
+
 ### Deployment
 
 #### Supabase + Render

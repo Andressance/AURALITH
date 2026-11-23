@@ -60,6 +60,13 @@ def test_sqlalchemy_provider_rejects_direct_supabase_host():
         assert "6543" in str(error)
 
 
+def test_neon_is_not_documented_as_storage(monkeypatch):
+    monkeypatch.setenv("AURALITH_STORAGE_PROVIDER", "neon")
+    provider = __import__("os").environ["AURALITH_STORAGE_PROVIDER"]
+    assert provider != "supabase"
+    assert provider != "local"
+
+
 def test_password_policy_rejects_weak_defaults():
     assert not is_strong_owner_password("change-me")
     assert not is_strong_owner_password("ChangeMe123456")

@@ -53,8 +53,13 @@ if storage_provider_name == "supabase":
     storage = SupabaseStorageProvider(
         bucket=os.getenv("SUPABASE_STORAGE_BUCKET", "music"),
     )
-else:
+elif storage_provider_name == "local":
     storage = LocalStorageProvider(STORAGE_DIR)
+else:
+    raise RuntimeError(
+        "AURALITH_STORAGE_PROVIDER must be 'local' or 'supabase'; "
+        "Neon is a PostgreSQL database provider, not an object-storage provider"
+    )
 
 
 class Base(DeclarativeBase):
