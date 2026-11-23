@@ -15,10 +15,14 @@ class SupabaseStorageProvider:
         bucket: str = "music",
     ):
         self.url = (url or os.getenv("SUPABASE_URL", "")).rstrip("/")
-        self.service_key = service_key or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        self.service_key = (
+            service_key
+            or os.getenv("SUPABASE_SECRET_KEY", "")
+            or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        )
         self.bucket = bucket
         if not self.url or not self.service_key:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
+            raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
         parsed = urlparse(self.url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError("SUPABASE_URL must use HTTPS")

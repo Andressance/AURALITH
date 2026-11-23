@@ -28,7 +28,7 @@ The backend is not coupled to Supabase or to a local installation:
 
 - Set `AURALITH_DB_URL` to any SQLAlchemy-compatible PostgreSQL or SQLite URL.
 - Set `AURALITH_STORAGE_PROVIDER=local` for filesystem storage.
-- Set `AURALITH_STORAGE_PROVIDER=supabase` and provide `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_STORAGE_BUCKET` for Supabase Storage.
+- Set `AURALITH_STORAGE_PROVIDER=supabase` and provide `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SUPABASE_STORAGE_BUCKET` for Supabase Storage. `SUPABASE_SERVICE_ROLE_KEY` remains accepted only as deprecated compatibility.
 - Supabase PostgreSQL uses a regular PostgreSQL `AURALITH_DB_URL`; an optional adapter can later enable Supabase-specific features without changing the API modules.
 
 ### MVP scope
@@ -53,9 +53,19 @@ The detailed architecture, security model, roadmap, and future federation design
 2. Apply `supabase/migrations/202611230001_initial.sql`.
 3. Create a private Supabase Storage bucket named `music`.
 4. Deploy `apps/api` to Render using `render.yaml` or the Dockerfile.
-5. Set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`, `AURALITH_OWNER_PASSWORD`, and `AURALITH_CORS_ORIGINS`.
-6. Deploy `apps/web` on Vercel and configure its API proxy to the Render backend.
-7. Never expose `SUPABASE_SERVICE_ROLE_KEY` to the frontend.
+5. Set `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET`, `AURALITH_OWNER_PASSWORD`, `AURALITH_CORS_ORIGINS=https://<your-vercel-app>.vercel.app`, and `AURALITH_COOKIE_SAMESITE=none`.
+6. Deploy `apps/web` on Vercel and set `VITE_API_URL=https://<your-render-service>.onrender.com`.
+7. Never expose `SUPABASE_SECRET_KEY` to the frontend.
+
+For Render, use a **Web Service** with:
+
+- **Root Directory:** leave it blank.
+- **Language/Environment:** Docker.
+- **Dockerfile Path:** `apps/api/Dockerfile`.
+- **Docker Build Context Directory:** `.`
+- **Health Check Path:** `/api/health`.
+
+Do not select `apps/api` as the root directory. The Docker build needs the repository root to copy `pyproject.toml` and the `apps` package.
 
 #### Local Docker
 

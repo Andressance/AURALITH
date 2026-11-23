@@ -29,7 +29,7 @@ Auralith is under active development. Report vulnerabilities privately to the re
 - Set a strong `AURALITH_OWNER_PASSWORD`.
 - Set `AURALITH_COOKIE_SECURE=true` behind HTTPS.
 - Set `AURALITH_CORS_ORIGINS` to exact frontend origins.
-- Never expose `SUPABASE_SERVICE_ROLE_KEY` to frontend code.
+- Never expose `SUPABASE_SECRET_KEY` or deprecated `SUPABASE_SERVICE_ROLE_KEY` to frontend code.
 - Use a TLS reverse proxy or platform HTTPS endpoint.
 - Keep the Docker volume or database and music storage backed up.
 

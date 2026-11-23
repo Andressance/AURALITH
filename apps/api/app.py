@@ -111,6 +111,11 @@ password_hasher = PasswordHasher()
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
 COOKIE_SECURE = os.getenv("AURALITH_COOKIE_SECURE", "true").lower() == "true"
+COOKIE_SAMESITE = os.getenv("AURALITH_COOKIE_SAMESITE", "lax").lower()
+if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    raise RuntimeError("AURALITH_COOKIE_SAMESITE must be lax, strict, or none")
+if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
+    raise RuntimeError("AURALITH_COOKIE_SAMESITE=none requires secure cookies")
 INSECURE_LOCAL_COOKIES = os.getenv("AURALITH_ALLOW_INSECURE_COOKIES", "false").lower() == "true"
 if not COOKIE_SECURE and not INSECURE_LOCAL_COOKIES:
     raise RuntimeError("AURALITH_COOKIE_SECURE=false requires AURALITH_ALLOW_INSECURE_COOKIES=true")
@@ -246,7 +251,7 @@ def login(request: Request, payload: dict, db: Annotated[Session, Depends(db_ses
         token,
         httponly=True,
         secure=COOKIE_SECURE,
-        samesite="lax",
+        samesite=COOKIE_SAMESITE,
         max_age=12 * 60 * 60,
     )
     return response

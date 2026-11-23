@@ -6,6 +6,10 @@ services:
     dockerContext: .
     healthCheckPath: /api/health
     envVars:
+      - key: AURALITH_ENV
+        value: production
+      - key: AURALITH_OWNER_USERNAME
+        value: owner
       - key: AURALITH_DB_URL
         sync: false
       - key: AURALITH_OWNER_PASSWORD
@@ -18,9 +22,11 @@ services:
         value: supabase
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
+      - key: SUPABASE_SECRET_KEY
         sync: false
       - key: SUPABASE_STORAGE_BUCKET
         value: music
       - key: AURALITH_CORS_ORIGINS
         sync: false
+      - key: AURALITH_COOKIE_SAMESITE
+        value: "none"
