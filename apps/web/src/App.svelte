@@ -27,13 +27,37 @@
   let selectedTrackIds = [];
   let showPlaylistPicker = false;
   let newPlaylistName = "";
-  let activeView = "library";
   let playerVisible = false;
   let pullDistance = 0;
   let pullStart = 0;
   let pulling = false;
   let refreshing = false;
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+  function viewFromPath() {
+    const path = window.location.pathname;
+    if (path.startsWith("/profile")) return "profile";
+    if (path.startsWith("/playlists")) return "playlists";
+    return "library";
+  }
+
+  let activeView = viewFromPath();
+
+  function navigateView(view) {
+    const path = view === "library" ? "/" : `/${view}`;
+    if (window.location.pathname !== path) {
+      history.pushState({ view }, "", path);
+    }
+    activeView = view;
+    if (view !== "library") {
+      selectedPlaylistId = null;
+      selectedPlaylist = null;
+    }
+  }
+
+  window.addEventListener("popstate", () => {
+    activeView = viewFromPath();
+  });
 
   function text(value, fallback = "") {
     return typeof value === "string" ? value : fallback;
@@ -207,6 +231,15 @@
     selectedPlaylist = await api(`/api/playlists/${playlist.id}`);
   }
 
+  async function playPlaylist(playlist) {
+    const detail = await api(`/api/playlists/${playlist.id}`);
+    selectedPlaylistId = playlist.id;
+    selectedPlaylist = detail;
+    if (detail.tracks?.length) {
+      play(detail.tracks[0]);
+    }
+  }
+
   async function addToSelectedPlaylist(track) {
     if (!selectedPlaylistId) return;
     await api(`/api/playlists/${selectedPlaylistId}/tracks/${track.id}`, { method: "POST" });
@@ -275,7 +308,7 @@
         body: JSON.stringify({ username: profileUsername, display_name: profileName })
       });
       profileName = profile.display_name;
-      activeView = "library";
+      navigateView("library");
     } catch (cause) {
       error = cause.message;
     }
@@ -464,7 +497,7 @@
       {#each playlists as playlist}
         <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
           {#if playlist.cover_url}
-            <img src={assetUrl(playlist.cover_url)} alt="" />
+            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
           {:else if activeView === "library"}
             <span>♫</span>
           {/if}
@@ -474,17 +507,17 @@
     </div>
   {/if}
 {:else}
-  <div class="app-shell">
+  <div class="app-shell" class:player-visible={playerVisible}>
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="Auralith">
         <img src="/icon.svg" alt="" />
         <h1>Auralith</h1>
       </a>
       <nav>
-        <button class="nav-item" class:active={activeView === "library"} onclick={() => { activeView = "library"; visibleTracks = tracks; selectedPlaylistId = null; selectedPlaylist = null; }}>⌂ <span>Inicio</span></button>
-        <button class="nav-item" onclick={() => { activeView = "library"; searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
-        <button class="nav-item" class:active={activeView === "playlists"} onclick={() => activeView = "playlists"}>♫ <span>Playlists</span></button>
-        <button class="nav-item" class:active={activeView === "profile"} onclick={() => activeView = "profile"}>● <span>Perfil</span></button>
+        <button class="nav-item" class:active={activeView === "library"} onclick={() => { navigateView("library"); visibleTracks = tracks; }}>⌂ <span>Inicio</span></button>
+        <button class="nav-item" onclick={() => { navigateView("library"); searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
+        <button class="nav-item" class:active={activeView === "playlists"} onclick={() => navigateView("playlists")}>♫ <span>Playlists</span></button>
+        <button class="nav-item" class:active={activeView === "profile"} onclick={() => navigateView("profile")}>● <span>Perfil</span></button>
       </nav>
       <div class="sidebar-library">
         <div class="sidebar-heading">
@@ -496,30 +529,41 @@
           <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
         </div>
         {#each playlists as playlist}
-          <button class="playlist-item" class:selected={selectedPlaylistId === playlist.id} onclick={() => selectPlaylist(playlist)}>
-            <span class="playlist-cover">♫</span>
-            <span><strong>{playlist.name}</strong><small>Playlist</small></span>
-          </button>
+          <div class="playlist-item" class:selected={selectedPlaylistId === playlist.id}>
+            <button class="playlist-open" onclick={() => selectPlaylist(playlist)}>
+              {#if playlist.cover_url}
+                <img class="playlist-cover" src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
+              {:else}
+                <span class="playlist-cover">♫</span>
+              {/if}
+              <span><strong>{playlist.name}</strong><small>Playlist</small></span>
+            </button>
+            <button
+              class="playlist-play"
+              onclick={(event) => { event.stopPropagation(); playPlaylist(playlist); }}
+              aria-label={`Reproducir playlist ${playlist.name}`}
+              title={`Reproducir ${playlist.name}`}
+            >
+              ▶
+            </button>
+          </div>
         {/each}
       </div>
       <div class="sidebar-footer">
-        <button class="profile-button" onclick={() => activeView = "profile"}>
+        <button class="profile-button" onclick={() => navigateView("profile")}>
           {#if profile?.avatar_url}
-            <img src={assetUrl(profile.avatar_url)} alt="" />
+            <img src={assetUrl(profile.avatar_url)} alt="" fetchpriority="high" decoding="async" />
           {:else}
             <span>{profileName.slice(0, 1).toUpperCase()}</span>
           {/if}
           <strong>{profileName}</strong>
         </button>
-        <button onclick={downloadBackup}>Copia de seguridad</button>
-        <label>Restaurar<input type="file" accept=".zip" onchange={restoreBackup} /></label>
-        <button onclick={logout}>Cerrar sesión</button>
       </div>
     </aside>
     <button
       class="mobile-profile-button"
       aria-label={`Abrir perfil de ${profileName}`}
-      onclick={() => activeView = "profile"}
+      onclick={() => navigateView("profile")}
     >
       {#if profile?.avatar_url}
         <img src={assetUrl(profile.avatar_url)} alt="" />
@@ -546,7 +590,7 @@
       {#if error}<p class="error">{error}</p>{/if}
       {#if activeView === "profile"}
         <section class="profile-page">
-          <button class="page-back" onclick={() => activeView = "library"}><span>←</span> Volver a la biblioteca</button>
+          <button class="page-back" onclick={() => navigateView("library")}><span>←</span> Volver a la biblioteca</button>
           <div class="profile-hero">
             <div class="profile-avatar-large">
               {#if profile?.avatar_url}
@@ -584,10 +628,31 @@
               </label>
             </section>
             <div class="profile-actions">
-              <button type="button" class="profile-cancel" onclick={() => activeView = "library"}>Cancelar</button>
+              <button type="button" class="profile-cancel" onclick={() => navigateView("library")}>Cancelar</button>
               <button type="submit" class="profile-save">Guardar cambios</button>
             </div>
           </form>
+          <section class="profile-account-actions">
+            <div>
+              <span>Cuenta y datos</span>
+              <p>Gestiona tu sesión y las copias locales de la biblioteca.</p>
+            </div>
+            <div class="profile-action-grid">
+              <button type="button" onclick={downloadBackup}>
+                <span>↧</span>
+                <strong>Copia de seguridad</strong>
+              </button>
+              <label>
+                <span>↥</span>
+                <strong>Restaurar</strong>
+                <input type="file" accept=".zip" onchange={restoreBackup} />
+              </label>
+              <button type="button" class="danger" onclick={logout}>
+                <span>⏻</span>
+                <strong>Cerrar sesión</strong>
+              </button>
+            </div>
+          </section>
         </section>
       {:else if activeView === "playlists"}
         <section class="playlist-page">
@@ -604,7 +669,8 @@
           </div>
           <div class="playlist-grid">
             {#each playlists as playlist}
-              <button class="playlist-card" onclick={() => { selectPlaylist(playlist); activeView = "library"; }}>
+              <article class="playlist-card">
+                <button class="playlist-card-open" onclick={() => { navigateView("library"); selectPlaylist(playlist); }}>
                 {#if playlist.cover_url}
                   <img src={assetUrl(playlist.cover_url)} alt="" />
                 {:else}
@@ -612,7 +678,14 @@
                 {/if}
                 <strong>{playlist.name}</strong>
                 <small>Playlist</small>
-              </button>
+                </button>
+                <button
+                  class="playlist-card-play"
+                  onclick={() => playPlaylist(playlist)}
+                  aria-label={`Reproducir playlist ${playlist.name}`}
+                  title={`Reproducir ${playlist.name}`}
+                >▶</button>
+              </article>
             {/each}
           </div>
         </section>
@@ -656,7 +729,7 @@
         <section class="playlist-hero">
           <div class="hero-cover">
             {#if selectedPlaylist.cover_url}
-              <img src={assetUrl(selectedPlaylist.cover_url)} alt="" />
+              <img src={assetUrl(selectedPlaylist.cover_url)} alt="" fetchpriority="low" loading="lazy" decoding="async" />
             {:else}
               ♫
             {/if}
@@ -696,7 +769,7 @@
               </label>
               <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
                 {#if track.cover_url}
-                  <img src={assetUrl(track.cover_url)} alt="" />
+                  <img src={assetUrl(track.cover_url)} alt="" loading="lazy" decoding="async" />
                 {:else}
                   <span>{titleInitial(track.title)}</span>
                 {/if}

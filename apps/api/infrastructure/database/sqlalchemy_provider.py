@@ -9,11 +9,18 @@ class SQLAlchemyDatabaseProvider:
     def __init__(self, url: str):
         self.url = self.normalize_url(url)
         connect_args = {"check_same_thread": False} if self.url.startswith("sqlite") else {}
-        self.engine = create_engine(
-            self.url,
-            connect_args=connect_args,
-            pool_pre_ping=True,
-        )
+        engine_kwargs = {
+            "connect_args": connect_args,
+            "pool_pre_ping": True,
+        }
+        if self.url.startswith("postgresql"):
+            engine_kwargs.update({
+                "pool_size": 3,
+                "max_overflow": 5,
+                "pool_timeout": 15,
+                "pool_recycle": 280,
+            })
+        self.engine = create_engine(self.url, **engine_kwargs)
         self.sessions = sessionmaker(bind=self.engine, expire_on_commit=False)
 
     @staticmethod
