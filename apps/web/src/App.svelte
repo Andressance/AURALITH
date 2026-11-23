@@ -181,7 +181,10 @@
 {:else}
   <main class="app-shell">
     <header>
-      <h1>Auralith</h1>
+      <a class="brand" href="/" aria-label="Auralith">
+        <img src="/icon.svg" alt="" />
+        <h1>Auralith</h1>
+      </a>
       <div class="header-actions">
         <label class="upload">Upload MP3 / FLAC<input type="file" accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
         <button class="secondary" onclick={downloadBackup}>Backup</button>

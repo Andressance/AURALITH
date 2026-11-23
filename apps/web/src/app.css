@@ -59,6 +59,8 @@ button { cursor: pointer; }
   padding: 24px;
 }
 .app-shell header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.brand { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
+.brand img { width: 44px; height: 44px; border-radius: 12px; }
 .upload { border: 1px solid #454d64; border-radius: 8px; padding: 9px 12px; cursor: pointer; }
 .upload input { display: none; }
 .track-list { display: grid; gap: 8px; }
