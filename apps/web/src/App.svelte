@@ -856,7 +856,7 @@
     {/if}
   </div>
   {#if selectedTrackIds.length}
-    <section class="selection-bar">
+    <section class="selection-bar" class:player-visible={playerVisible}>
       <strong>{selectedTrackIds.length} seleccionada(s)</strong>
       <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
       <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
@@ -864,7 +864,7 @@
   {/if}
 
   {#if showPlaylistPicker}
-    <div class="playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir a playlist">
+    <div class="playlist-picker" class:player-visible={playerVisible} role="dialog" aria-modal="true" aria-label="Añadir a playlist">
       <div class="sheet-heading">
         <strong>Añadir a una playlist</strong>
         <button onclick={() => showPlaylistPicker = false}>×</button>
