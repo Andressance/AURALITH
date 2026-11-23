@@ -137,6 +137,16 @@ class Favorite(Base):
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
 
 
+class Invitation(Base):
+    __tablename__ = "invitations"
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, nullable=False)
+    display_name = Column(String)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime)
+
+
 Base.metadata.create_all(engine)
 
 
@@ -385,6 +395,92 @@ def me(user: Annotated[User, Depends(current_user)]):
         "role": user.role,
         "avatar_url": f"/api/profile/avatar" if getattr(user, "avatar_path", None) else None,
     }
+
+
+def require_owner(user: User):
+    if user.role != "owner":
+        raise HTTPException(status_code=403, detail="Owner access required")
+
+
+@app.get("/api/owner/invitations")
+def list_invitations(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    invitations = db.scalars(
+        select(Invitation).order_by(Invitation.id.desc())
+    ).all()
+    return [
+        {
+            "id": invitation.id,
+            "code": invitation.code,
+            "display_name": invitation.display_name,
+            "expires_at": invitation.expires_at.isoformat(),
+            "used": invitation.used_at is not None,
+        }
+        for invitation in invitations
+        if invitation.expires_at > now
+    ]
+
+
+@app.post("/api/owner/invitations")
+def create_invitation(
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    display_name = str(payload.get("display_name") or "").strip()[:100]
+    code = secrets.token_urlsafe(24)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=7)
+    invitation = Invitation(
+        code=code,
+        display_name=display_name or None,
+        created_by=user.id,
+        expires_at=expires_at,
+    )
+    db.add(invitation)
+    db.commit()
+    db.refresh(invitation)
+    return {
+        "code": code,
+        "display_name": invitation.display_name,
+        "expires_at": invitation.expires_at.isoformat(),
+    }
+
+
+@app.post("/api/invitations/{code}/activate")
+def activate_invitation(
+    code: str,
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+):
+    invitation = db.scalar(select(Invitation).where(Invitation.code == code))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not invitation or invitation.used_at or invitation.expires_at <= now:
+        raise HTTPException(status_code=410, detail="Invitation is invalid or expired")
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    display_name = str(payload.get("display_name") or invitation.display_name or "").strip()[:100]
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{2,63}", username):
+        raise HTTPException(status_code=400, detail="Username contains unsupported characters")
+    if not is_strong_owner_password(password):
+        raise HTTPException(status_code=400, detail="Password must contain lowercase, uppercase and digits")
+    if db.scalar(select(User).where(User.username == username)):
+        raise HTTPException(status_code=409, detail="Username is already in use")
+    invited = User(
+        username=username,
+        display_name=display_name or None,
+        password_hash=password_hasher.hash(password),
+        role="guest",
+    )
+    db.add(invited)
+    invitation.used_at = now
+    db.commit()
+    db.refresh(invited)
+    return {"ok": True, "username": invited.username, "role": invited.role}
 
 
 @app.post("/api/profile")
@@ -747,7 +843,27 @@ def create_playlist(payload: dict, db: Annotated[Session, Depends(db_session)], 
     db.add(playlist)
     db.commit()
     db.refresh(playlist)
-    return {"id": playlist.id, "name": playlist.name}
+    track_ids = payload.get("track_ids")
+    if isinstance(track_ids, list):
+        normalized_ids = list(dict.fromkeys(
+            track_id for track_id in track_ids
+            if isinstance(track_id, int)
+        ))
+        tracks = db.scalars(
+            select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
+        ).all()
+        for position, track in enumerate(tracks):
+            db.add(PlaylistTrack(
+                playlist_id=playlist.id,
+                track_id=track.id,
+                position=position,
+            ))
+        db.commit()
+    return {
+        "id": playlist.id,
+        "name": playlist.name,
+        "cover_url": None,
+    }
 
 
 @app.get("/api/playlists/{playlist_id}")
@@ -833,6 +949,51 @@ def add_playlist_track(
     db.add(PlaylistTrack(playlist_id=playlist_id, track_id=track_id, position=position))
     db.commit()
     return {"ok": True}
+
+
+@app.post("/api/playlists/{playlist_id}/tracks")
+def add_playlist_tracks(
+    playlist_id: int,
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    track_ids = payload.get("track_ids")
+    if not isinstance(track_ids, list):
+        raise HTTPException(status_code=400, detail="track_ids must be a list")
+    normalized_ids = list(dict.fromkeys(
+        track_id for track_id in track_ids
+        if isinstance(track_id, int)
+    ))
+    if not normalized_ids:
+        return {"added": 0}
+    tracks = db.scalars(
+        select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
+    ).all()
+    existing = set(db.scalars(
+        select(PlaylistTrack.track_id).where(
+            PlaylistTrack.playlist_id == playlist_id,
+            PlaylistTrack.track_id.in_(normalized_ids),
+        )
+    ))
+    position = db.query(PlaylistTrack).filter(
+        PlaylistTrack.playlist_id == playlist_id
+    ).count()
+    added = 0
+    for track in tracks:
+        if track.id not in existing:
+            db.add(PlaylistTrack(
+                playlist_id=playlist_id,
+                track_id=track.id,
+                position=position,
+            ))
+            position += 1
+            added += 1
+    db.commit()
+    return {"added": added}
 
 
 @app.delete("/api/playlists/{playlist_id}/tracks/{track_id}")

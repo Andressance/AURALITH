@@ -25,6 +25,14 @@
   let showProfile = false;
   let profileName = "";
   let profileUsername = "";
+  let selectedTrackIds = [];
+  let showPlaylistPicker = false;
+  let newPlaylistName = "";
+  let showMobilePlaylists = false;
+  let pullDistance = 0;
+  let pullStart = 0;
+  let pulling = false;
+  let refreshing = false;
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function text(value, fallback = "") {
@@ -34,6 +42,12 @@
   function streamUrl(track) {
     const token = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
     return `${API_BASE}/api/tracks/${track.id}/stream${token}`;
+  }
+
+  function assetUrl(path) {
+    if (!path) return "";
+    const token = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
+    return `${API_BASE}${path}${token}`;
   }
 
   function titleInitial(title) {
@@ -199,6 +213,41 @@
     selectedPlaylist = await api(`/api/playlists/${selectedPlaylistId}`);
   }
 
+  function toggleTrackSelection(trackId) {
+    selectedTrackIds = selectedTrackIds.includes(trackId)
+      ? selectedTrackIds.filter((id) => id !== trackId)
+      : [...selectedTrackIds, trackId];
+  }
+
+  async function addSelectedToPlaylist(playlistId) {
+    if (!selectedTrackIds.length) return;
+    await api(`/api/playlists/${playlistId}/tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ track_ids: selectedTrackIds })
+    });
+    selectedTrackIds = [];
+    showPlaylistPicker = false;
+    await loadPlaylists();
+  }
+
+  async function createPlaylistWithSelection(event) {
+    event.preventDefault();
+    if (!newPlaylistName.trim()) return;
+    await api("/api/playlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: newPlaylistName.trim(),
+        track_ids: selectedTrackIds
+      })
+    });
+    newPlaylistName = "";
+    selectedTrackIds = [];
+    showPlaylistPicker = false;
+    await loadPlaylists();
+  }
+
   async function removeFromPlaylist(track) {
     await api(`/api/playlists/${selectedPlaylistId}/tracks/${track.id}`, { method: "DELETE" });
     selectedPlaylist = await api(`/api/playlists/${selectedPlaylistId}`);
@@ -286,6 +335,7 @@
     currentTrack = track;
     progress = 0;
     duration = 0;
+    updateMediaSession(track);
   }
 
   function togglePlayback() {
@@ -312,6 +362,57 @@
     return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
   }
 
+  function pullTouchStart(event) {
+    if (event.touches.length !== 1) return;
+    const panel = event.currentTarget;
+    if (panel.scrollTop <= 0) {
+      pullStart = event.touches[0].clientY;
+      pulling = true;
+    }
+  }
+
+  function pullTouchMove(event) {
+    if (!pulling) return;
+    const distance = event.touches[0].clientY - pullStart;
+    if (distance > 0) {
+      pullDistance = Math.min(distance * 0.55, 96);
+    }
+  }
+
+  async function pullTouchEnd() {
+    if (!pulling) return;
+    pulling = false;
+    if (pullDistance >= 64) {
+      refreshing = true;
+      pullDistance = 64;
+      await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
+    }
+    refreshing = false;
+    pullDistance = 0;
+  }
+
+  function updateMediaSession(track) {
+    if (!("mediaSession" in navigator) || !track) return;
+    const artwork = track.cover_url
+      ? [{ src: assetUrl(track.cover_url), sizes: "512x512", type: "image/jpeg" }]
+      : [{ src: `${window.location.origin}/icon.svg`, sizes: "any", type: "image/svg+xml" }];
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: text(track.title, "Canción sin título"),
+      artist: text(track.artist, "Auralith"),
+      album: text(track.album, "Auralith"),
+      artwork
+    });
+    navigator.mediaSession.setActionHandler("play", () => {
+      audio?.play();
+    });
+    navigator.mediaSession.setActionHandler("pause", () => {
+      audio?.pause();
+    });
+    navigator.mediaSession.setActionHandler("seekto", (details) => {
+      if (audio && Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime;
+    });
+  }
+
   load().catch(() => {});
 </script>
 
@@ -332,6 +433,37 @@
       <button type="submit">Sign in</button>
     </form>
   </main>
+
+  {#if selectedTrackIds.length}
+    <section class="selection-bar">
+      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
+      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
+      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
+    </section>
+  {/if}
+
+  {#if showPlaylistPicker}
+    <div class="playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir a playlist">
+      <div class="sheet-heading">
+        <strong>Añadir a una playlist</strong>
+        <button onclick={() => showPlaylistPicker = false}>×</button>
+      </div>
+      <form onsubmit={createPlaylistWithSelection}>
+        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
+        <button type="submit">Crear y añadir</button>
+      </form>
+      {#each playlists as playlist}
+        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
+          {#if playlist.cover_url}
+            <img src={assetUrl(playlist.cover_url)} alt="" />
+          {:else}
+            <span>♫</span>
+          {/if}
+          <strong>{playlist.name}</strong>
+        </button>
+      {/each}
+    </div>
+  {/if}
 {:else}
   <div class="app-shell">
     <aside class="sidebar">
@@ -342,6 +474,7 @@
       <nav>
         <button class="nav-item active" onclick={() => { visibleTracks = tracks; }}>⌂ <span>Inicio</span></button>
         <button class="nav-item" onclick={() => { searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
+        <button class="nav-item mobile-playlists-button" onclick={() => showMobilePlaylists = !showMobilePlaylists}>♫ <span>Playlists</span></button>
       </nav>
       <div class="sidebar-library">
         <div class="sidebar-heading">
@@ -361,7 +494,11 @@
       </div>
       <div class="sidebar-footer">
         <button class="profile-button" onclick={() => showProfile = !showProfile}>
-          <span>{profileName.slice(0, 1).toUpperCase()}</span>
+          {#if profile?.avatar_url}
+            <img src={assetUrl(profile.avatar_url)} alt="" />
+          {:else}
+            <span>{profileName.slice(0, 1).toUpperCase()}</span>
+          {/if}
           <strong>{profileName}</strong>
         </button>
         <button onclick={downloadBackup}>Copia de seguridad</button>
@@ -369,9 +506,52 @@
         <button onclick={logout}>Cerrar sesión</button>
       </div>
     </aside>
+    <button
+      class="mobile-profile-button"
+      aria-label={`Abrir perfil de ${profileName}`}
+      onclick={() => showProfile = !showProfile}
+    >
+      {#if profile?.avatar_url}
+        <img src={assetUrl(profile.avatar_url)} alt="" />
+      {:else}
+        <span>{profileName.slice(0, 1).toUpperCase()}</span>
+      {/if}
+    </button>
 
-    <main class="main-panel">
+    <main
+      class="main-panel"
+      ontouchstart={pullTouchStart}
+      ontouchmove={pullTouchMove}
+      ontouchend={pullTouchEnd}
+    >
+      {#if pullDistance > 0}
+        <div
+          class="pull-refresh"
+          class:ready={pullDistance >= 64}
+          style={`transform: translateY(${pullDistance}px)`}
+        >
+          <span>{refreshing ? "↻" : pullDistance >= 64 ? "↓" : "↕"}</span>
+        </div>
+      {/if}
       {#if error}<p class="error">{error}</p>{/if}
+      {#if showMobilePlaylists}
+        <section class="mobile-playlist-sheet">
+          <div class="sheet-heading">
+            <strong>Playlists</strong>
+            <button onclick={() => showMobilePlaylists = false}>×</button>
+          </div>
+          {#each playlists as playlist}
+            <button class="playlist-item" onclick={() => { selectPlaylist(playlist); showMobilePlaylists = false; }}>
+              {#if playlist.cover_url}
+                <img class="playlist-cover" src={assetUrl(playlist.cover_url)} alt="" />
+              {:else}
+                <span class="playlist-cover">♫</span>
+              {/if}
+              <span><strong>{playlist.name}</strong><small>Playlist</small></span>
+            </button>
+          {/each}
+        </section>
+      {/if}
       {#if showProfile}
         <section class="profile-panel">
           <div class="profile-avatar">
@@ -456,6 +636,14 @@
         <section class="track-grid">
           {#each visibleTracks as track}
             <article class:playing={currentTrack?.id === track.id}>
+              <label class="track-select">
+                <input
+                  type="checkbox"
+                  checked={selectedTrackIds.includes(track.id)}
+                  onchange={() => toggleTrackSelection(track.id)}
+                  aria-label={`Seleccionar ${text(track.title, "Canción")}`}
+                />
+              </label>
               <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
                 {#if track.cover_url}
                   <img src={`${API_BASE}${track.cover_url}`} alt="" />
