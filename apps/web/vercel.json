@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/profile", "destination": "/" },
     { "source": "/playlists", "destination": "/" },
-    { "source": "/playlists/:id", "destination": "/" }
+    { "source": "/playlists/:id", "destination": "/" },
+    { "source": "/invite/:code", "destination": "/" }
   ]
 }

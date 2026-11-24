@@ -1,4 +1,6 @@
 <script>
+  import { tick } from "svelte";
+
   let authenticated = false;
   let username = "owner";
   let password = "";
@@ -26,12 +28,34 @@
   let profileUsername = "";
   let selectedTrackIds = [];
   let showPlaylistPicker = false;
+  let dragOverPlaylistId = null;
   let newPlaylistName = "";
   let playerVisible = false;
   let pullDistance = 0;
   let pullStart = 0;
   let pulling = false;
   let refreshing = false;
+  let playbackQueue = [];
+  let shuffleMode = false;
+  let loopMode = "off";
+  let showQueuePanel = false;
+  let csvPlaylistName = "";
+  let csvImporting = false;
+  let csvImportReport = null;
+  let showUploadPlaylistPicker = false;
+  let pendingUploadFiles = [];
+  let uploadPlaylistIds = [];
+  let uploadNewPlaylistName = "";
+  let ownerUsers = [];
+  let ownerInvitations = [];
+  let invitationName = "";
+  let invitationCode = "";
+  let inviteCode = window.location.pathname.startsWith("/invite/")
+    ? window.location.pathname.split("/invite/")[1]
+    : "";
+  let inviteUsername = "";
+  let invitePassword = "";
+  let inviteDisplayName = "";
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function viewFromPath() {
@@ -112,8 +136,31 @@
     return response.status === 204 ? null : response.json();
   }
 
-  async function login(event) {
+  async function activateInvite(event) {
     event.preventDefault();
+    error = "";
+    try {
+      await api(`/api/invitations/${encodeURIComponent(inviteCode)}/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: inviteUsername,
+          password: invitePassword,
+          display_name: inviteDisplayName
+        })
+      });
+      history.replaceState({}, "", "/");
+      inviteCode = "";
+      username = inviteUsername;
+      password = invitePassword;
+      await login();
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function login(event) {
+    event?.preventDefault();
     error = "";
     try {
       const result = await api("/api/auth/login", {
@@ -137,6 +184,12 @@
     profileUsername = profile.username;
     authenticated = true;
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
+    if (profile.role === "owner") await loadOwnerUsers();
+  }
+
+  async function loadOwnerUsers() {
+    ownerUsers = await api("/api/owner/users");
+    ownerInvitations = await api("/api/owner/invitations");
   }
 
   async function loadTracks() {
@@ -163,6 +216,19 @@
   async function upload(event) {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
+    if (files.length > 1) {
+      pendingUploadFiles = files;
+      uploadPlaylistIds = [];
+      uploadNewPlaylistName = "";
+      showUploadPlaylistPicker = true;
+      event.target.value = "";
+      return;
+    }
+    await runUpload(files);
+  }
+
+  async function runUpload(files) {
+    if (!files?.length) return;
     error = "";
     uploading = true;
     uploadQueue = files.map((file) => ({
@@ -172,6 +238,7 @@
     }));
     uploadProgress = `0 de ${files.length} completadas`;
 
+    const uploadedTrackIds = [];
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index];
       uploadQueue = uploadQueue.map((item, itemIndex) =>
@@ -184,6 +251,7 @@
       form.append("file", file);
       try {
         const uploadedTrack = await api("/api/tracks", { method: "POST", body: form });
+        if (uploadedTrack.id) uploadedTrackIds.push(uploadedTrack.id);
         if (selectedPlaylistId && uploadedTrack.id) {
           await api(`/api/playlists/${selectedPlaylistId}/tracks/${uploadedTrack.id}`, { method: "POST" });
         }
@@ -203,7 +271,25 @@
     }
     uploadProgress = `${files.length} de ${files.length} completadas`;
     uploading = false;
-    event.target.value = "";
+    if (uploadNewPlaylistName.trim() && uploadedTrackIds.length) {
+      await api("/api/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: uploadNewPlaylistName.trim(), track_ids: uploadedTrackIds })
+      });
+    }
+    for (const playlistId of uploadPlaylistIds) {
+      if (uploadedTrackIds.length) {
+        await api(`/api/playlists/${playlistId}/tracks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ track_ids: uploadedTrackIds })
+        });
+      }
+    }
+    uploadPlaylistIds = [];
+    uploadNewPlaylistName = "";
+    pendingUploadFiles = [];
     await Promise.all([
       loadTracks(),
       selectedPlaylistId ? selectPlaylist(playlists.find((playlist) => playlist.id === selectedPlaylistId) || { id: selectedPlaylistId }) : Promise.resolve()
@@ -219,6 +305,48 @@
     });
     playlistName = "";
     await loadPlaylists();
+  }
+
+  async function importPlaylistCsv(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const file = formElement.querySelector('input[type="file"]')?.files?.[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append("file", file);
+    form.append("name", csvPlaylistName);
+    csvImporting = true;
+    error = "";
+    try {
+      csvImportReport = await api("/api/playlists/import/csv", {
+        method: "POST",
+        body: form
+      });
+      csvPlaylistName = "";
+      formElement.reset();
+      await loadPlaylists();
+    } catch (cause) {
+      error = cause.message;
+    } finally {
+      csvImporting = false;
+    }
+  }
+
+  async function confirmImportCandidate(result) {
+    if (!csvImportReport || !result.candidate || result.confirmed) return;
+    try {
+      await api(`/api/playlists/${csvImportReport.playlist_id}/tracks/${result.candidate.id}`, {
+        method: "POST"
+      });
+      csvImportReport = {
+        ...csvImportReport,
+        results: csvImportReport.results.map((item) =>
+          item.row === result.row ? { ...item, confirmed: true } : item
+        )
+      };
+    } catch (cause) {
+      error = cause.message;
+    }
   }
 
   async function favorite(track) {
@@ -240,6 +368,7 @@
     const detail = await api(`/api/playlists/${playlist.id}`);
     selectedPlaylistId = playlist.id;
     selectedPlaylist = detail;
+    playbackQueue = detail.tracks || [];
     if (detail.tracks?.length) {
       play(detail.tracks[0]);
     }
@@ -255,6 +384,41 @@
     selectedTrackIds = selectedTrackIds.includes(trackId)
       ? selectedTrackIds.filter((id) => id !== trackId)
       : [...selectedTrackIds, trackId];
+  }
+
+  function openTrackPlaylistPicker(trackId) {
+    selectedTrackIds = [trackId];
+    showPlaylistPicker = true;
+  }
+
+  function startTrackDrag(event, trackId) {
+    if (!selectedTrackIds.includes(trackId)) {
+      selectedTrackIds = [trackId];
+    }
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData("text/auralith-track", String(trackId));
+  }
+
+  function endTrackDrag() {
+    dragOverPlaylistId = null;
+  }
+
+  function dragTrackOver(event, playlistId) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    dragOverPlaylistId = playlistId;
+  }
+
+  function leavePlaylistDrop(event) {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      dragOverPlaylistId = null;
+    }
+  }
+
+  async function dropTracksOnPlaylist(event, playlistId) {
+    event.preventDefault();
+    dragOverPlaylistId = null;
+    await addSelectedToPlaylist(playlistId);
   }
 
   async function addSelectedToPlaylist(playlistId) {
@@ -332,6 +496,38 @@
     }
   }
 
+  async function createInvitation(event) {
+    event.preventDefault();
+    try {
+      const invitation = await api("/api/owner/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: invitationName })
+      });
+      invitationCode = invitation.code;
+      invitationName = "";
+      await loadOwnerUsers();
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function copyInvitation() {
+    if (!invitationCode) return;
+    await navigator.clipboard?.writeText(`${window.location.origin}/invite/${invitationCode}`);
+  }
+
+  async function revokeInvitation(invitationId) {
+    await api(`/api/owner/invitations/${invitationId}`, { method: "DELETE" });
+    await loadOwnerUsers();
+  }
+
+  async function deleteGuest(account) {
+    if (!window.confirm(`¿Eliminar la cuenta de ${account.display_name}? Se borrarán también sus canciones y playlists.`)) return;
+    await api(`/api/owner/users/${account.id}`, { method: "DELETE" });
+    await loadOwnerUsers();
+  }
+
   async function uploadPlaylistCover(event) {
     const file = event.target.files?.[0];
     if (!file || !selectedPlaylistId) return;
@@ -364,7 +560,14 @@
     }
   }
 
-  function play(track) {
+  async function play(track) {
+    if (!playbackQueue.some((item) => item.id === track.id)) {
+      playbackQueue = selectedPlaylist?.tracks?.length
+        ? selectedPlaylist.tracks
+        : visibleTracks.length
+          ? visibleTracks
+          : tracks;
+    }
     if (currentTrack?.id === track.id && audio) {
       if (audio.paused) {
         audio.play();
@@ -379,6 +582,15 @@
     progress = 0;
     duration = 0;
     updateMediaSession(track);
+    await tick();
+    if (audio) {
+      audio.load();
+      try {
+        await audio.play();
+      } catch {
+        isPlaying = false;
+      }
+    }
   }
 
   function togglePlayback() {
@@ -389,6 +601,79 @@
     } else {
       audio.pause();
     }
+  }
+
+  function getNextQueueIndex() {
+    if (!playbackQueue.length) return -1;
+    if (shuffleMode) {
+      if (playbackQueue.length === 1) return 0;
+      const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+      const candidates = playbackQueue
+        .map((_, index) => index)
+        .filter((index) => index !== currentIndex);
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    return currentIndex >= 0 ? (currentIndex + 1) % playbackQueue.length : 0;
+  }
+
+  function playNext() {
+    const index = getNextQueueIndex();
+    if (index >= 0) play(playbackQueue[index]);
+  }
+
+  function playPrevious() {
+    if (!playbackQueue.length) return;
+    if (audio?.currentTime > 3) {
+      audio.currentTime = 0;
+      return;
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    const index = currentIndex > 0 ? currentIndex - 1 : playbackQueue.length - 1;
+    play(playbackQueue[index]);
+  }
+
+  function toggleShuffle() {
+    shuffleMode = !shuffleMode;
+  }
+
+  function enqueueTrack(track) {
+    if (playbackQueue.some((item) => item.id === track.id)) return;
+    playbackQueue = [...playbackQueue, track];
+    if (!currentTrack) play(track);
+  }
+
+  function removeQueuedTrack(trackId) {
+    playbackQueue = playbackQueue.filter((track) => track.id !== trackId);
+  }
+
+  function cycleLoopMode() {
+    loopMode = loopMode === "off" ? "all" : loopMode === "all" ? "one" : "off";
+  }
+
+  function handleTrackEnded() {
+    if (loopMode === "one") {
+      if (audio) {
+        audio.currentTime = 0;
+        audio.play();
+      }
+      return;
+    }
+    const currentIndex = playbackQueue.findIndex((track) => track.id === currentTrack?.id);
+    if (loopMode === "all" || currentIndex < playbackQueue.length - 1) {
+      playNext();
+    }
+  }
+
+  function toggleUploadPlaylist(playlistId) {
+    uploadPlaylistIds = uploadPlaylistIds.includes(playlistId)
+      ? uploadPlaylistIds.filter((id) => id !== playlistId)
+      : [...uploadPlaylistIds, playlistId];
+  }
+
+  async function confirmUploadPlaylist() {
+    showUploadPlaylistPicker = false;
+    await runUpload(pendingUploadFiles);
   }
 
   function seek(event) {
@@ -458,58 +743,52 @@
     navigator.mediaSession.setActionHandler("seekto", (details) => {
       if (audio && Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime;
     });
+    navigator.mediaSession.setActionHandler("previoustrack", playPrevious);
+    navigator.mediaSession.setActionHandler("nexttrack", playNext);
   }
 
   load().catch(() => {});
 </script>
 
 {#if !authenticated}
-  <main class="login-shell">
-    <form onsubmit={(event) => login(event)}>
-      <h1>Auralith</h1>
-      <p>Your private music cloud.</p>
-      <label>
-        Username
-        <input bind:value={username} autocomplete="username" />
-      </label>
-      <label>
-        Password
-        <input type="password" bind:value={password} autocomplete="current-password" />
-      </label>
-      {#if error}<p class="error">{error}</p>{/if}
-      <button type="submit">Sign in</button>
-    </form>
-  </main>
-
-  {#if selectedTrackIds.length}
-    <section class="selection-bar">
-      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
-      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
-      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
-    </section>
-  {/if}
-
-  {#if showPlaylistPicker}
-    <div class="playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir a playlist">
-      <div class="sheet-heading">
-        <strong>Añadir a una playlist</strong>
-        <button onclick={() => showPlaylistPicker = false}>×</button>
-      </div>
-      <form onsubmit={createPlaylistWithSelection}>
-        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
-        <button type="submit">Crear y añadir</button>
+  {#if inviteCode}
+    <main class="login-shell">
+      <form onsubmit={activateInvite}>
+        <h1>Unirse a Auralith</h1>
+        <p>Crea tu cuenta personal.</p>
+        <label>
+          Nombre visible
+          <input bind:value={inviteDisplayName} maxlength="100" autocomplete="name" />
+        </label>
+        <label>
+          Usuario
+          <input bind:value={inviteUsername} maxlength="63" autocomplete="username" />
+        </label>
+        <label>
+          Contraseña
+          <input type="password" bind:value={invitePassword} autocomplete="new-password" />
+        </label>
+        {#if error}<p class="error">{error}</p>{/if}
+        <button type="submit">Crear cuenta</button>
       </form>
-      {#each playlists as playlist}
-        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
-          {#if playlist.cover_url}
-            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
-          {:else if activeView === "library"}
-            <span>♫</span>
-          {/if}
-          <strong>{playlist.name}</strong>
-        </button>
-      {/each}
-    </div>
+    </main>
+  {:else}
+    <main class="login-shell">
+      <form onsubmit={(event) => login(event)}>
+        <h1>Auralith</h1>
+        <p>Your private music cloud.</p>
+        <label>
+          Username
+          <input bind:value={username} autocomplete="username" />
+        </label>
+        <label>
+          Password
+          <input type="password" bind:value={password} autocomplete="current-password" />
+        </label>
+        {#if error}<p class="error">{error}</p>{/if}
+        <button type="submit">Sign in</button>
+      </form>
+    </main>
   {/if}
 {:else}
   <div class="app-shell" class:player-visible={playerVisible}>
@@ -534,7 +813,16 @@
           <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
         </div>
         {#each playlists as playlist}
-          <div class="playlist-item" class:selected={selectedPlaylistId === playlist.id}>
+          <div
+            class="playlist-item"
+            class:selected={selectedPlaylistId === playlist.id}
+            class:drop-target={dragOverPlaylistId === playlist.id}
+            role="group"
+            aria-label={`Playlist ${playlist.name}`}
+            ondragover={(event) => dragTrackOver(event, playlist.id)}
+            ondragleave={leavePlaylistDrop}
+            ondrop={(event) => dropTracksOnPlaylist(event, playlist.id)}
+          >
             <button class="playlist-open" onclick={() => selectPlaylist(playlist)}>
               {#if playlist.cover_url}
                 <img class="playlist-cover" src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
@@ -658,6 +946,60 @@
               </button>
             </div>
           </section>
+          {#if profile?.role === "owner"}
+            <section class="user-management">
+              <div class="user-management-heading">
+                <div>
+                  <span>Administración</span>
+                  <h2>Usuarios</h2>
+                  <p>Crea invitaciones y gestiona las cuentas de esta instancia.</p>
+                </div>
+              </div>
+              <form class="invitation-form" onsubmit={createInvitation}>
+                <input bind:value={invitationName} maxlength="100" placeholder="Nombre del invitado (opcional)" />
+                <button type="submit">Crear invitación</button>
+              </form>
+              {#if invitationCode}
+                <div class="invitation-link">
+                  <div>
+                    <span>Enlace nuevo</span>
+                    <strong>{window.location.origin}/invite/{invitationCode}</strong>
+                  </div>
+                  <button onclick={copyInvitation}>Copiar</button>
+                </div>
+              {/if}
+              <div class="user-list">
+                {#each ownerUsers as account}
+                  <article>
+                    <div class="user-avatar">{account.display_name.slice(0, 1).toUpperCase()}</div>
+                    <div class="user-details">
+                      <strong>{account.display_name}</strong>
+                      <span>@{account.username} · {account.role === "owner" ? "Propietario" : "Invitado"}</span>
+                    </div>
+                    {#if account.role !== "owner"}
+                      <button class="danger" onclick={() => deleteGuest(account)} title="Eliminar cuenta">×</button>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+              {#if ownerInvitations.length}
+                <div class="pending-invitations">
+                  <strong>Invitaciones pendientes</strong>
+                  {#each ownerInvitations as invitation}
+                    {#if !invitation.used}
+                      <article>
+                        <div>
+                          <strong>{invitation.display_name || "Invitado"}</strong>
+                          <span>Caduca {new Date(invitation.expires_at).toLocaleDateString()}</span>
+                        </div>
+                        <button onclick={() => revokeInvitation(invitation.id)} title="Revocar invitación">Revocar</button>
+                      </article>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          {/if}
         </section>
       {:else if activeView === "playlists"}
         <section class="playlist-page">
@@ -672,6 +1014,42 @@
             <input bind:value={playlistName} placeholder="Nombre de la playlist" maxlength="200" />
             <button onclick={createPlaylist}>Crear</button>
           </div>
+          <form class="csv-import-form" onsubmit={importPlaylistCsv}>
+            <div>
+              <strong>Importar desde CSV</strong>
+              <span>Se añadirán automáticamente solo coincidencias exactas.</span>
+            </div>
+            <input bind:value={csvPlaylistName} maxlength="200" placeholder="Nombre de la playlist (opcional)" />
+            <input type="file" accept=".csv,text/csv" required />
+            <button type="submit" disabled={csvImporting}>
+              {csvImporting ? "Importando…" : "Importar CSV"}
+            </button>
+          </form>
+          {#if csvImportReport}
+            <section class="csv-import-report" aria-live="polite">
+              <div>
+                <strong>{csvImportReport.playlist_name}</strong>
+                <span>{csvImportReport.added} coincidencias exactas añadidas</span>
+              </div>
+              <button onclick={() => csvImportReport = null} aria-label="Cerrar informe">×</button>
+              {#each csvImportReport.results as result}
+                <article>
+                  <div>
+                    <strong>{result.title}</strong>
+                    <span>{result.artist || "Artista desconocido"} · {result.status.replaceAll("_", " ")}</span>
+                    {#if result.candidate}
+                      <small>Sugerencia: {result.candidate.title} — {result.candidate.artist || "Artista desconocido"}</small>
+                    {/if}
+                  </div>
+                  {#if result.candidate && !result.confirmed && result.status !== "EXACT"}
+                    <button onclick={() => confirmImportCandidate(result)}>Añadir</button>
+                  {:else if result.confirmed}
+                    <span class="csv-import-confirmed">Añadida</span>
+                  {/if}
+                </article>
+              {/each}
+            </section>
+          {/if}
           <div class="playlist-grid">
             {#each playlists as playlist}
               <article class="playlist-card">
@@ -751,10 +1129,16 @@
         </section>
         <section class="track-list playlist-tracks">
           {#each selectedPlaylist.tracks as track, index}
-            <article class:playing={currentTrack?.id === track.id}>
+            <article
+              class:playing={currentTrack?.id === track.id}
+              draggable="true"
+              ondragstart={(event) => startTrackDrag(event, track.id)}
+              ondragend={endTrackDrag}
+            >
               <span class="track-index">{index + 1}</span>
               <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
               <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
+              <button class="row-action" onclick={() => enqueueTrack(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
               <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
             </article>
           {/each}
@@ -766,7 +1150,12 @@
         </section>
         <section class="track-grid">
           {#each visibleTracks as track}
-            <article class:playing={currentTrack?.id === track.id}>
+            <article
+              class:playing={currentTrack?.id === track.id}
+              draggable="true"
+              ondragstart={(event) => startTrackDrag(event, track.id)}
+              ondragend={endTrackDrag}
+            >
               <label class="track-select">
                 <input
                   type="checkbox"
@@ -786,6 +1175,8 @@
               <strong>{text(track.title, "Canción sin título")}</strong>
               <span>{text(track.artist, "Artista desconocido")}</span>
               <div class="track-actions">
+                <button onclick={() => enqueueTrack(track)} aria-label="Añadir a la cola" title="Añadir a la cola">↗</button>
+                <button onclick={() => openTrackPlaylistPicker(track.id)} aria-label="Añadir a playlist" title="Añadir a playlist">＋</button>
                 <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
                 <button onclick={() => deleteTrack(track)} aria-label="Eliminar" title="Eliminar">×</button>
               </div>
@@ -808,7 +1199,16 @@
           <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
         </div>
         <div class="player-center">
-          <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
+          <div class="player-controls">
+            <button class:active={shuffleMode} onclick={toggleShuffle} aria-label="Aleatorio" title="Aleatorio">⇄</button>
+            <button onclick={playPrevious} aria-label="Anterior" title="Anterior">↤</button>
+            <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
+            <button onclick={playNext} aria-label="Siguiente" title="Siguiente">↦</button>
+            <button class:active={showQueuePanel} onclick={() => showQueuePanel = !showQueuePanel} aria-label={`Cola de reproducción (${playbackQueue.length})`} title="Cola de reproducción">≡</button>
+            <button class:active={loopMode !== "off"} onclick={cycleLoopMode} aria-label="Modo bucle" title={loopMode === "off" ? "Bucle desactivado" : loopMode === "all" ? "Repetir lista" : "Repetir canción"}>
+              {loopMode === "one" ? "↻1" : "↻"}
+            </button>
+          </div>
           <div class="timeline">
             <span>{formatTime(progress)}</span>
             <input aria-label="Posición" type="range" min="0" max={duration || 0} value={progress} oninput={seek} />
@@ -826,8 +1226,86 @@
           ontimeupdate={(event) => progress = event.currentTarget.currentTime}
           onloadedmetadata={(event) => duration = event.currentTarget.duration}
           onvolumechange={(event) => volume = event.currentTarget.volume}
+          onended={handleTrackEnded}
         ></audio>
       </footer>
     {/if}
+    {#if showQueuePanel}
+      <aside class="queue-panel" class:player-visible={playerVisible} aria-label="Cola de reproducción">
+        <div class="queue-heading">
+          <strong>Cola de reproducción</strong>
+          <span>{playbackQueue.length} canciones</span>
+          <button onclick={() => showQueuePanel = false} aria-label="Cerrar cola">×</button>
+        </div>
+        {#if currentTrack}
+          <div class="queue-current"><small>Reproduciendo</small><strong>{currentTrack.title}</strong></div>
+        {/if}
+        {#each playbackQueue.filter((track) => track.id !== currentTrack?.id) as track}
+          <article>
+            <button onclick={() => play(track)}>
+              <strong>{track.title}</strong>
+              <span>{track.artist || "Artista desconocido"}</span>
+            </button>
+            <button onclick={() => removeQueuedTrack(track.id)} aria-label={`Quitar ${track.title} de la cola`}>×</button>
+          </article>
+        {:else}
+          <p>No hay canciones próximas en la cola.</p>
+        {/each}
+      </aside>
+    {/if}
   </div>
+  {#if selectedTrackIds.length}
+    <section class="selection-bar" class:player-visible={playerVisible}>
+      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
+      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
+      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
+    </section>
+  {/if}
+
+  {#if showPlaylistPicker}
+    <div class="playlist-picker" class:player-visible={playerVisible} role="dialog" aria-modal="true" aria-label="Añadir a playlist">
+      <div class="sheet-heading">
+        <strong>Añadir a una playlist</strong>
+        <button onclick={() => showPlaylistPicker = false}>×</button>
+      </div>
+      <form onsubmit={createPlaylistWithSelection}>
+        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
+        <button type="submit">Crear y añadir</button>
+      </form>
+      {#each playlists as playlist}
+        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
+          {#if playlist.cover_url}
+            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
+          {:else}
+            <span>♫</span>
+          {/if}
+          <strong>{playlist.name}</strong>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  {#if showUploadPlaylistPicker}
+    <div class="upload-playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir canciones al subir">
+      <div class="sheet-heading">
+        <strong>Añadir las {pendingUploadFiles.length} canciones a playlists</strong>
+        <button onclick={() => { showUploadPlaylistPicker = false; pendingUploadFiles = []; }}>×</button>
+      </div>
+      <form onsubmit={(event) => { event.preventDefault(); confirmUploadPlaylist(); }}>
+        <input bind:value={uploadNewPlaylistName} placeholder="Crear una nueva playlist" maxlength="200" />
+        <div class="upload-playlist-options">
+          {#each playlists as playlist}
+            <label>
+              <input
+                type="checkbox"
+                checked={uploadPlaylistIds.includes(playlist.id)}
+                onchange={() => toggleUploadPlaylist(playlist.id)}
+              />
+              <span>{playlist.name}</span>
+            </label>
+          {/each}
+        </div>
+        <button type="submit">Subir y añadir</button>
+      </form>
+    </div>
+  {/if}
 {/if}

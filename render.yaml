@@ -40,5 +40,7 @@ services:
         value: music
       - key: AURALITH_CORS_ORIGINS
         sync: false
+      - key: AURALITH_TRUSTED_PROXIES
+        sync: false
       - key: AURALITH_COOKIE_SAMESITE
         value: "none"

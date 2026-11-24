@@ -159,6 +159,20 @@ flowchart LR
 
 > **La federación es una dirección futura.** Autenticación entre instancias, permisos remotos y streaming federado deben diseñarse e implementarse antes de habilitar este flujo.
 
+### Evolución de almacenamiento · nube secundaria
+
+Google Drive y Dropbox se contemplan como **almacenamiento frío opcional**, no como requisito ni como proveedor activo del MVP. La biblioteca y sus metadatos seguirían disponibles en la base principal; el audio archivado podría recuperarse bajo demanda y usar una caché local limitada, aceptando una primera reproducción más lenta.
+
+```mermaid
+flowchart LR
+    A[API Auralith] --> P[(Almacenamiento principal)]
+    A -. lectura bajo demanda .-> C[Drive / Dropbox]
+    C -. recuperación controlada .-> K[Caché temporal limitada]
+    K --> R[Reproductor]
+```
+
+La integración requerirá autorización OAuth del propietario, límites de cuota, manejo seguro de tokens y pruebas de streaming/rangos. No se almacenarán credenciales en el frontend ni se sincronizarán copias automáticamente.
+
 ---
 
 <a id="espanol"></a>
@@ -171,9 +185,9 @@ AURALITH es una plataforma de streaming musical personal, self-hosted y open sou
 
 La plataforma busca ofrecer una experiencia similar a los servicios comerciales de streaming, pero sin depender de suscripciones, algoritmos propietarios ni plataformas centralizadas.
 
-Cada instalación pertenece a una persona que administra su propia instancia y puede compartirla con familiares o amigos de confianza.
+Cada instalación pertenece a una persona que administra su instancia y puede invitar a familiares o amigos de confianza. En el MVP actual, las canciones forman un catálogo compartido dentro de la instancia; los perfiles, playlists, favoritos y canciones ocultas son por cuenta.
 
-El objetivo inicial es construir una plataforma que funcione perfectamente para un pequeño grupo de usuarios, con bibliotecas privadas, cuentas independientes, reproducción fluida y una experiencia moderna tanto en ordenador como en móvil.
+El objetivo inicial es ofrecer a un grupo pequeño cuentas independientes, reproducción fluida y una experiencia moderna tanto en ordenador como en móvil. La privacidad de bibliotecas separadas sigue siendo una posible evolución, no el comportamiento actual del catálogo.
 
 La plataforma debe ser modular, segura, extensible y preparada para evolucionar hacia funcionalidades sociales descentralizadas en futuras versiones.
 
@@ -209,13 +223,13 @@ Una persona instala y administra su instancia.
 
 Puede crear cuentas para sus padres, amigos u otros usuarios de confianza.
 
-Cada usuario puede:
+Cada usuario invitado puede:
 
 - Acceder a su propio perfil.
 - Configurar su contraseña.
-- Tener una biblioteca musical independiente.
-- Subir su música.
-- Organizarla.
+- Consultar y reproducir el catálogo compartido de la instancia.
+- Subir música al catálogo de la instancia.
+- Ocultar canciones de su propia vista.
 - Crear playlists.
 - Marcar favoritos.
 - Importar playlists externas.
@@ -223,7 +237,7 @@ Cada usuario puede:
 - Utilizar la aplicación desde ordenador y móvil.
 - Mantener su propia configuración y dashboard.
 
-El administrador gestiona la instancia y sus usuarios, pero no tiene acceso automático a las bibliotecas privadas de los demás usuarios.
+El propietario administra las invitaciones y cuentas, y puede eliminar canciones del catálogo compartido. Las playlists, favoritos y preferencias de canciones ocultas pertenecen a cada cuenta.
 
 ### Funcionalidades principales de V1
 
@@ -233,7 +247,7 @@ El administrador gestiona la instancia y sus usuarios, pero no tiene acceso auto
 - Creación y activación de cuentas.
 - Sesiones persistentes y seguras.
 - Dashboard personal.
-- Biblioteca musical privada.
+- Catálogo musical compartido por instancia con preferencias por usuario.
 - Subida de música.
 - Extracción de metadatos.
 - Gestión de artistas, álbumes, canciones y géneros.
@@ -703,17 +717,15 @@ class StorageProvider:
         ...
 ```
 
-## Provider inicial
+## Providers disponibles en el MVP
 
-Supabase Storage.
+- Sistema de archivos local.
+- Supabase Storage privado.
+- Almacenamiento compatible con S3 (por ejemplo, Neon Storage).
 
-## Providers futuros
+## Almacenamiento secundario futuro
 
-- Local filesystem.
-- S3.
-- Cloudflare R2.
-- MinIO.
-- Otros proveedores compatibles.
+Google Drive y Dropbox podrían funcionar como tier frío opcional: archivos menos usados se recuperarían bajo demanda y, si se configura, se conservarían temporalmente en una caché limitada. No son proveedores disponibles hoy ni se usarán como origen principal del streaming hasta validar OAuth, cuotas, URLs/rangos y recuperación ante fallos.
 
 La aplicación deberá poder cambiar de proveedor sin modificar los módulos de biblioteca o reproducción.
 
@@ -850,21 +862,18 @@ Se incluirá:
 - Filtros.
 - Ordenación.
 
-La búsqueda nunca devolverá recursos privados de otros usuarios.
+La búsqueda respeta las canciones ocultas por la cuenta autenticada.
 
 ---
 
 # 15. Importación de playlists
 
-La aplicación permitirá importar playlists externas.
+La importación CSV está disponible en V1; las integraciones con servicios externos se mantienen como evolución sujeta a sus APIs y condiciones de uso.
 
 ## V1
 
 ### CSV
-
-Será el sistema universal de importación.
-
-Permitirá importar playlists con campos como:
+La importación CSV ya está disponible. Admite UTF-8 (con o sin BOM), separadores comunes y hasta 500 canciones/2 MB. Reconoce campos como:
 
 - Title.
 - Artist.
@@ -872,6 +881,8 @@ Permitirá importar playlists con campos como:
 - Duration.
 - ISRC.
 - Position.
+
+Las coincidencias exactas se añaden a una playlist nueva; las aproximadas se presentan como sugerencias para confirmar manualmente. El informe conserva las canciones no encontradas, ambiguas, duplicadas o inválidas. No se importa audio desde el CSV.
 
 ### Spotify
 
@@ -889,7 +900,7 @@ No se descargará ni extraerá audio de Spotify, YouTube ni otros servicios.
 
 # 16. Matching de canciones
 
-Cuando se importe una playlist, las canciones deberán buscarse en la biblioteca del usuario.
+Al importar un CSV, las canciones se buscan en el catálogo visible para esa cuenta. ISRC y artista+título normalizados se usan para coincidencias exactas; duración y álbum ayudan a detectar ambigüedades, y las sugerencias aproximadas requieren confirmación.
 
 ## Matching cascade
 
@@ -1124,7 +1135,7 @@ Límites deseables: concurrencia, duración, memoria y tamaño máximos; reinten
 
 ### Identidad, autenticación y permisos
 
-- **MVP actual:** contraseñas con Argon2id, cookies de sesión HTTP-only, caducidad de sesión, rate limiting de acceso, comprobaciones de origen y separación por propietario, según los controles descritos en [SECURITY.md](SECURITY.md).
+- **MVP actual:** contraseñas con Argon2id, cookies de sesión HTTP-only, caducidad de sesión, rate limiting acotado, comprobaciones de origen y permisos de cuenta, según los controles descritos en [SECURITY.md](SECURITY.md).
 - **Federación futura:** autenticación mutua entre instancias, solicitudes firmadas, protección contra repetición, límites de tasa y validación de permisos en cada recurso.
 - La amistad o la existencia de una identidad remota nunca concede por sí sola acceso a una biblioteca.
 - Aplicar mínimo privilegio y denegar por defecto. Verificar los permisos en el servidor, no confiar en IDs ni autorizaciones declaradas por el cliente.
@@ -1141,7 +1152,7 @@ Límites deseables: concurrencia, duración, memoria y tamaño máximos; reinten
 
 ### Controles existentes en el MVP
 
-El MVP ya incluye controles descritos en [SECURITY.md](SECURITY.md), entre ellos hashing Argon2id, sesiones HTTP-only, límite de subida, validación de MP3/FLAC, rate limiting de login y límites para restauración ZIP. Consulta ese archivo para los requisitos de despliegue y las verificaciones antes de publicar; **no presupongas que las funciones futuras de federación o sandbox están disponibles**.
+El MVP ya incluye los controles descritos en [SECURITY.md](SECURITY.md), entre ellos hashing Argon2id, sesiones HTTP-only, límites de subida, validación de MP3/FLAC, rate limiting de login y peticiones, y límites de restauración ZIP. El rate limiter de la API es local al proceso: no sustituye la protección perimetral contra DDoS. La federación, la cola de workers, el antivirus y el sandbox siguen siendo capacidades futuras.
 
 ---
 
@@ -1169,6 +1180,7 @@ El despliegue puede usar SQLite y almacenamiento local en Docker, o separar fron
 - Mantener los límites modulares y extraer servicios solo si hay una necesidad operativa demostrable.
 - Ejecutar importación y análisis en jobs con límites de concurrencia, memoria, tamaño y tiempo; no convertir workers adicionales en requisito de una instancia pequeña.
 - Mantener FFmpeg, antivirus, sandboxing y caché como capacidades opcionales cuando el caso de uso y los recursos lo justifiquen.
+- Explorar Drive/Dropbox como tier secundario frío con recuperación bajo demanda y caché acotada; no como almacenamiento de streaming principal del MVP.
 - Añadir protocolos de identidad y compartición federada solo después de definir autenticación entre instancias, autorización, límites y protección contra abuso.
 - Permitir que cada instancia opere de forma independiente, sin dependencia obligatoria de infraestructura central.
 

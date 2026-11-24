@@ -1,12 +1,19 @@
+from types import SimpleNamespace
 from pathlib import Path
 
 from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
+from apps.api.infrastructure.storage.interface import StorageProvider
 from apps.api.infrastructure.storage.local import LocalStorageProvider
+from apps.api.infrastructure.storage.s3 import S3StorageProvider
+from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
 from apps.api.core.security import (
+    SlidingWindowRateLimiter,
+    get_client_ip,
     is_allowed_origin,
     is_strong_owner_password,
     LoginRateLimiter,
 )
+from apps.api.core.playlist_import import match_playlist_rows, parse_playlist_csv
 
 
 def test_local_storage_round_trip(tmp_path: Path):
@@ -123,6 +130,80 @@ def test_login_rate_limiter_blocks_after_limit():
     assert limiter.allow("127.0.0.2")
 
 
-def test_vercel_origin_is_allowed():
-    assert is_allowed_origin("https://auralith.vercel.app", set())
+def test_sliding_window_limiter_is_bounded_and_returns_retry_after():
+    limiter = SlidingWindowRateLimiter(max_keys=2)
+    assert limiter.check("first", limit=1, window_seconds=60) == 0
+    assert limiter.check("first", limit=1, window_seconds=60) > 0
+    assert limiter.check("second", limit=1, window_seconds=60) == 0
+    assert limiter.check("third", limit=1, window_seconds=60) == 0
+    assert len(limiter.attempts) == 2
+
+
+def test_client_ip_ignores_forwarding_from_untrusted_peer(monkeypatch):
+    monkeypatch.setenv("AURALITH_TRUSTED_PROXIES", "10.0.0.0/8")
+    untrusted = SimpleNamespace(
+        client=SimpleNamespace(host="203.0.113.8"),
+        headers={"x-forwarded-for": "198.51.100.1"},
+    )
+    trusted = SimpleNamespace(
+        client=SimpleNamespace(host="10.0.0.2"),
+        headers={"x-forwarded-for": "198.51.100.1, 10.0.0.3"},
+    )
+    assert get_client_ip(untrusted) == "203.0.113.8"
+    assert get_client_ip(trusted) == "198.51.100.1"
+
+
+def test_vercel_origin_requires_explicit_opt_in(monkeypatch):
     assert not is_allowed_origin("https://example.com", set())
+    monkeypatch.delenv("AURALITH_ALLOW_VERCEL_ORIGINS", raising=False)
+    assert not is_allowed_origin("https://auralith.vercel.app", set())
+    monkeypatch.setenv("AURALITH_ALLOW_VERCEL_ORIGINS", "true")
+    assert is_allowed_origin("https://auralith.vercel.app", set())
+
+
+def test_csv_parser_accepts_utf8_bom_and_semicolon_delimiters():
+    rows = parse_playlist_csv(
+        "\ufeffTitle;Artist;Duration;Position\nA song;An artist;3:45;1\n".encode()
+    )
+    assert rows[0]["title"] == "A song"
+    assert rows[0]["duration"] == 225
+
+
+def test_csv_parser_enforces_row_and_duration_limits():
+    try:
+        parse_playlist_csv(b"Title,Duration\nSong,not-a-duration\n")
+        assert False, "invalid duration should be rejected"
+    except ValueError as error:
+        assert "duration" in str(error)
+
+    content = "Title\n" + "".join(f"Song {index}\n" for index in range(501))
+    try:
+        parse_playlist_csv(content.encode())
+        assert False, "more than 500 rows should be rejected"
+    except ValueError as error:
+        assert "500" in str(error)
+
+
+def test_csv_matching_flags_version_differences_for_review():
+    track = SimpleNamespace(
+        id=1,
+        title="Blue Horizon",
+        artist="The Tests",
+        album="Release",
+        duration=215,
+        isrc=None,
+    )
+    rows = parse_playlist_csv(
+        b"Title,Artist,Duration\nBlue Horizon (Live),The Tests,215\n"
+    )
+    result = match_playlist_rows(rows, [track])[0]
+    assert result["status"] == "REVIEW_REQUIRED"
+
+
+def test_storage_providers_implement_protocol(tmp_path: Path):
+    local = LocalStorageProvider(tmp_path)
+    assert isinstance(local, StorageProvider)
+    assert issubclass(LocalStorageProvider, StorageProvider)
+    assert issubclass(S3StorageProvider, StorageProvider)
+    assert issubclass(SupabaseStorageProvider, StorageProvider)
+

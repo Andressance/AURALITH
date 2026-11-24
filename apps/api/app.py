@@ -16,7 +16,7 @@ from typing import Annotated, Callable
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
@@ -36,9 +36,17 @@ try:
     from apps.api.infrastructure.storage.s3 import S3StorageProvider
     from apps.api.core.security import (
         build_allowed_origins,
+        get_client_ip,
         is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
+        SlidingWindowRateLimiter,
+    )
+    from apps.api.core.playlist_import import (
+        MAX_CSV_BYTES,
+        match_playlist_rows,
+        normalize_isrc,
+        parse_playlist_csv,
     )
 except ModuleNotFoundError:
     from infrastructure.database import SQLAlchemyDatabaseProvider
@@ -47,9 +55,17 @@ except ModuleNotFoundError:
     from infrastructure.storage.s3 import S3StorageProvider
     from core.security import (
         build_allowed_origins,
+        get_client_ip,
         is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
+        SlidingWindowRateLimiter,
+    )
+    from core.playlist_import import (
+        MAX_CSV_BYTES,
+        match_playlist_rows,
+        normalize_isrc,
+        parse_playlist_csv,
     )
 
 
@@ -114,6 +130,7 @@ class Track(Base):
     year = Column(Integer)
     genre = Column(String)
     duration = Column(Integer)
+    isrc = Column(String)
     sha256 = Column(String, unique=False, nullable=False)
     file_name = Column(String, nullable=False)
     stored_path = Column(String, nullable=False)
@@ -145,6 +162,13 @@ class Favorite(Base):
     track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
 
 
+class HiddenTrack(Base):
+    __tablename__ = "hidden_tracks"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+
+
 class Invitation(Base):
     __tablename__ = "invitations"
     id = Column(Integer, primary_key=True)
@@ -164,7 +188,7 @@ def ensure_optional_columns():
             ("display_name", "VARCHAR"),
             ("avatar_path", "VARCHAR"),
         ),
-        "tracks": (("cover_path", "VARCHAR"),),
+        "tracks": (("cover_path", "VARCHAR"), ("isrc", "VARCHAR")),
         "playlists": (("cover_path", "VARCHAR"),),
     }
     inspector = inspect(engine)
@@ -185,6 +209,7 @@ ensure_optional_columns()
 password_hasher = PasswordHasher()
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
+ALLOW_VERCEL_ORIGINS = os.getenv("AURALITH_ALLOW_VERCEL_ORIGINS", "false").lower() == "true"
 COOKIE_SECURE = os.getenv("AURALITH_COOKIE_SECURE", "true").lower() == "true"
 COOKIE_SAMESITE = os.getenv("AURALITH_COOKIE_SAMESITE", "lax").lower()
 if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
@@ -239,17 +264,38 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(ALLOWED_ORIGINS),
-    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)*vercel\.app",
+    allow_origin_regex=(
+        r"https://([a-zA-Z0-9-]+\.)*vercel\.app"
+        if ALLOW_VERCEL_ORIGINS
+        else None
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+request_rate_limiter = SlidingWindowRateLimiter()
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    client_ip = get_client_ip(request)
+    retry_after = request_rate_limiter.check(f"api:{client_ip}", limit=300, window_seconds=60)
+    if retry_after:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests"},
+            headers={"Retry-After": str(retry_after)},
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
+        fetch_site = request.headers.get("sec-fetch-site", "").lower()
+        if fetch_site == "cross-site" and not origin:
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
         if origin:
             if not is_allowed_origin(origin, ALLOWED_ORIGINS):
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected"})
@@ -316,10 +362,13 @@ def health_alias():
 def login(request: Request, payload: dict, db: Annotated[Session, Depends(db_session)]):
     username = str(payload.get("username", ""))[:128]
     password = str(payload.get("password", ""))[:1024]
-    forwarded = request.headers.get("x-forwarded-for")
-    client_ip = (forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown"))
+    client_ip = get_client_ip(request)
     if not login_rate_limiter.allow(client_ip):
-        raise HTTPException(status_code=429, detail="Too many login attempts")
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts",
+            headers={"Retry-After": str(login_rate_limiter.retry_after(client_ip))},
+        )
     user = db.scalar(select(User).where(User.username == username))
     if not user:
         try:
@@ -414,6 +463,17 @@ def require_owner(user: User):
         raise HTTPException(status_code=403, detail="Owner access required")
 
 
+def is_track_hidden(db: Session, user: User, track_id: int) -> bool:
+    if user.role == "owner":
+        return False
+    return db.scalar(
+        select(HiddenTrack.id).where(
+            HiddenTrack.user_id == user.id,
+            HiddenTrack.track_id == track_id,
+        )
+    ) is not None
+
+
 @app.get("/api/owner/invitations")
 def list_invitations(
     db: Annotated[Session, Depends(db_session)],
@@ -461,6 +521,83 @@ def create_invitation(
         "display_name": invitation.display_name,
         "expires_at": invitation.expires_at.isoformat(),
     }
+
+
+@app.get("/api/owner/users")
+def list_users(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    users = db.scalars(select(User).order_by(User.id)).all()
+    return [
+        {
+            "id": account.id,
+            "username": account.username,
+            "display_name": getattr(account, "display_name", None) or account.username,
+            "role": account.role,
+            "is_owner": account.role == "owner",
+        }
+        for account in users
+    ]
+
+
+@app.delete("/api/owner/invitations/{invitation_id}")
+def revoke_invitation(
+    invitation_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    invitation = db.get(Invitation, invitation_id)
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    db.delete(invitation)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/owner/users/{account_id}")
+def delete_guest(
+    account_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    require_owner(user)
+    account = db.get(User, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.role == "owner":
+        raise HTTPException(status_code=400, detail="The owner account cannot be deleted")
+
+    tracks = db.scalars(select(Track).where(Track.user_id == account.id)).all()
+    for track in tracks:
+        storage.delete(track.stored_path)
+        if getattr(track, "cover_path", None):
+            storage.delete(track.cover_path)
+
+    if tracks:
+        track_ids = [track.id for track in tracks]
+        db.query(PlaylistTrack).filter(
+            PlaylistTrack.track_id.in_(track_ids)
+        ).delete(synchronize_session=False)
+
+    guest_playlists = db.scalars(
+        select(Playlist).where(Playlist.user_id == account.id)
+    ).all()
+    if guest_playlists:
+        playlist_ids = [playlist.id for playlist in guest_playlists]
+        db.query(PlaylistTrack).filter(
+            PlaylistTrack.playlist_id.in_(playlist_ids)
+        ).delete(synchronize_session=False)
+    db.query(Favorite).filter(Favorite.user_id == account.id).delete()
+    db.query(HiddenTrack).filter(HiddenTrack.user_id == account.id).delete()
+    db.query(Session).filter(Session.user_id == account.id).delete()
+    db.query(Playlist).filter(Playlist.user_id == account.id).delete()
+    db.query(Track).filter(Track.user_id == account.id).delete()
+    db.delete(account)
+    db.commit()
+    return {"ok": True}
 
 
 @app.post("/api/invitations/{code}/activate")
@@ -724,9 +861,7 @@ async def upload_track(
         if not (has_id3 or frame_sync):
             raise HTTPException(status_code=400, detail="Invalid MP3 file")
     digest = hashlib.sha256(content).hexdigest()
-    existing = db.scalar(
-        select(Track).where(Track.user_id == user.id, Track.sha256 == digest)
-    )
+    existing = db.scalar(select(Track).where(Track.sha256 == digest))
     if existing:
         return {"id": existing.id, "duplicate": True}
     stored_name = f"{digest}{suffix}"
@@ -777,6 +912,15 @@ async def upload_track(
             year = int(str(year_value)[:4]) if year_value else None
         except (TypeError, ValueError):
             year = None
+        isrc_value = first("isrc") or first("tsrc")
+        if not isrc_value and raw_tags and getattr(raw_tags, "tags", None):
+            getall = getattr(raw_tags.tags, "getall", None)
+            for frame in getall("TXXX") if callable(getall) else []:
+                if str(getattr(frame, "desc", "")).casefold() == "isrc":
+                    values = getattr(frame, "text", [])
+                    isrc_value = values[0] if values else None
+                    break
+        isrc = normalize_isrc(str(isrc_value)) if isrc_value else None
     except Exception:
         storage.delete(stored_key)
         raise HTTPException(status_code=400, detail="Invalid or unreadable audio file")
@@ -800,6 +944,7 @@ async def upload_track(
         year=year,
         genre=str(genre) if genre else None,
         duration=duration,
+        isrc=isrc,
         sha256=digest,
         file_name=clean_metadata(Path(file.filename or "").name, stored_name) or stored_name,
         stored_path=stored_key,
@@ -831,7 +976,13 @@ def track_to_dict(track: Track):
 
 @app.get("/api/tracks")
 def list_tracks(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
-    tracks = db.scalars(select(Track).where(Track.user_id == user.id).order_by(Track.created_at.desc()))
+    hidden_ids = db.scalars(
+        select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    ).all()
+    statement = select(Track)
+    if hidden_ids:
+        statement = statement.where(Track.id.not_in(hidden_ids))
+    tracks = db.scalars(statement.order_by(Track.created_at.desc()))
     return [track_to_dict(track) for track in tracks]
 
 
@@ -841,8 +992,8 @@ async def track_cover(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
-    if not track or not getattr(track, "cover_path", None):
+    track = db.scalar(select(Track).where(Track.id == track_id))
+    if not track or is_track_hidden(db, user, track_id) or not getattr(track, "cover_path", None):
         raise HTTPException(status_code=404, detail="Cover not found")
 
     def save_path(path: str) -> None:
@@ -862,18 +1013,18 @@ def search_tracks(
     if not query:
         return []
     pattern = f"%{query.lower()}%"
-    tracks = db.scalars(
-        select(Track)
-        .where(
-            Track.user_id == user.id,
-            (Track.title.ilike(pattern))
-            | (Track.artist.ilike(pattern))
-            | (Track.album.ilike(pattern))
-            | (Track.genre.ilike(pattern)),
-        )
-        .order_by(Track.title)
-        .limit(100)
+    hidden_ids = db.scalars(
+        select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    ).all()
+    statement = select(Track).where(
+        (Track.title.ilike(pattern))
+        | (Track.artist.ilike(pattern))
+        | (Track.album.ilike(pattern))
+        | (Track.genre.ilike(pattern))
     )
+    if hidden_ids:
+        statement = statement.where(Track.id.not_in(hidden_ids))
+    tracks = db.scalars(statement.order_by(Track.title).limit(100))
     return [track_to_dict(track) for track in tracks]
 
 
@@ -884,8 +1035,8 @@ def stream_track(
     user: Annotated[User, Depends(current_user)],
     range_header: Annotated[str | None, Header(alias="Range")] = None,
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
-    if not track:
+    track = db.scalar(select(Track).where(Track.id == track_id))
+    if not track or is_track_hidden(db, user, track_id):
         raise HTTPException(status_code=404, detail="Track not found")
     if not storage.exists(track.stored_path):
         raise HTTPException(status_code=404, detail="Audio file missing")
@@ -960,31 +1111,91 @@ def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[
     } for p in playlists]
 
 
+@app.post("/api/playlists/import/csv")
+async def import_playlist_csv(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+    file: UploadFile = File(...),
+    name: str = Form(""),
+):
+    content = await file.read(MAX_CSV_BYTES + 1)
+    await file.close()
+    if len(content) > MAX_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="CSV file exceeds the 2 MB limit")
+    try:
+        rows = parse_playlist_csv(content)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if not rows:
+        raise HTTPException(status_code=400, detail="CSV contains no tracks")
+
+    hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    tracks = db.scalars(select(Track).where(Track.id.not_in(hidden_ids))).all()
+    results = match_playlist_rows(rows, tracks)
+
+    clean_name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()[:200]
+    if not clean_name:
+        clean_name = Path(file.filename or "").stem.strip()[:200] or "Imported playlist"
+    playlist = Playlist(user_id=user.id, name=clean_name)
+    db.add(playlist)
+    db.flush()
+    exact_track_ids = list(dict.fromkeys(
+        result["track_id"]
+        for result in results
+        if result["status"] == "EXACT" and result["track_id"] is not None
+    ))
+    for position, track_id in enumerate(exact_track_ids):
+        db.add(PlaylistTrack(
+            playlist_id=playlist.id,
+            track_id=track_id,
+            position=position,
+        ))
+    db.commit()
+    db.refresh(playlist)
+
+    counts = {}
+    for result in results:
+        counts[result["status"]] = counts.get(result["status"], 0) + 1
+    return {
+        "playlist_id": playlist.id,
+        "playlist_name": playlist.name,
+        "added": len(exact_track_ids),
+        "counts": counts,
+        "results": results,
+    }
+
+
 @app.post("/api/playlists")
 def create_playlist(payload: dict, db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     name = re.sub(r"[\x00-\x1f\x7f]", "", str(payload.get("name", ""))).strip()[:200]
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
-    playlist = Playlist(user_id=user.id, name=name)
-    db.add(playlist)
-    db.commit()
-    db.refresh(playlist)
+    tracks = []
     track_ids = payload.get("track_ids")
     if isinstance(track_ids, list):
         normalized_ids = list(dict.fromkeys(
             track_id for track_id in track_ids
-            if isinstance(track_id, int)
+            if isinstance(track_id, int) and not isinstance(track_id, bool)
         ))
-        tracks = db.scalars(
-            select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
-        ).all()
-        for position, track in enumerate(tracks):
-            db.add(PlaylistTrack(
-                playlist_id=playlist.id,
-                track_id=track.id,
-                position=position,
-            ))
-        db.commit()
+        if normalized_ids:
+            tracks = db.scalars(
+                select(Track).where(Track.id.in_(normalized_ids))
+            ).all()
+            if len(tracks) != len(normalized_ids) or any(
+                is_track_hidden(db, user, track.id) for track in tracks
+            ):
+                raise HTTPException(status_code=404, detail="One or more tracks are unavailable")
+    playlist = Playlist(user_id=user.id, name=name)
+    db.add(playlist)
+    db.flush()
+    for position, track in enumerate(tracks):
+        db.add(PlaylistTrack(
+            playlist_id=playlist.id,
+            track_id=track.id,
+            position=position,
+        ))
+    db.commit()
+    db.refresh(playlist)
     return {
         "id": playlist.id,
         "name": playlist.name,
@@ -1007,7 +1218,13 @@ def get_playlist(
         .order_by(PlaylistTrack.position)
     )
     track_ids = [entry.track_id for entry in entries]
-    tracks = db.scalars(select(Track).where(Track.id.in_(track_ids), Track.user_id == user.id))
+    hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    tracks = db.scalars(
+        select(Track).where(
+            Track.id.in_(track_ids),
+            Track.id.not_in(hidden_ids),
+        )
+    )
     tracks_by_id = {track.id: track for track in tracks}
     return {
         "id": playlist.id,
@@ -1088,8 +1305,8 @@ def add_playlist_track(
     user: Annotated[User, Depends(current_user)],
 ):
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
-    if not playlist or not track:
+    track = db.scalar(select(Track).where(Track.id == track_id))
+    if not playlist or not track or is_track_hidden(db, user, track_id):
         raise HTTPException(status_code=404, detail="Playlist or track not found")
     position = db.query(PlaylistTrack).filter(PlaylistTrack.playlist_id == playlist_id).count()
     db.add(PlaylistTrack(playlist_id=playlist_id, track_id=track_id, position=position))
@@ -1112,13 +1329,17 @@ def add_playlist_tracks(
         raise HTTPException(status_code=400, detail="track_ids must be a list")
     normalized_ids = list(dict.fromkeys(
         track_id for track_id in track_ids
-        if isinstance(track_id, int)
+        if isinstance(track_id, int) and not isinstance(track_id, bool)
     ))
     if not normalized_ids:
         return {"added": 0}
     tracks = db.scalars(
-        select(Track).where(Track.id.in_(normalized_ids), Track.user_id == user.id)
+        select(Track).where(Track.id.in_(normalized_ids))
     ).all()
+    if len(tracks) != len(normalized_ids) or any(
+        is_track_hidden(db, user, track.id) for track in tracks
+    ):
+        raise HTTPException(status_code=404, detail="One or more tracks are unavailable")
     existing = set(db.scalars(
         select(PlaylistTrack.track_id).where(
             PlaylistTrack.playlist_id == playlist_id,
@@ -1170,9 +1391,32 @@ def delete_track(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
+    track = db.scalar(select(Track).where(Track.id == track_id))
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+    if user.role != "owner":
+        hidden = db.scalar(
+            select(HiddenTrack).where(
+                HiddenTrack.user_id == user.id,
+                HiddenTrack.track_id == track_id,
+            )
+        )
+        if not hidden:
+            db.add(HiddenTrack(user_id=user.id, track_id=track_id))
+            db.query(Favorite).filter(
+                Favorite.user_id == user.id,
+                Favorite.track_id == track_id,
+            ).delete()
+            guest_playlist_ids = db.scalars(
+                select(Playlist.id).where(Playlist.user_id == user.id)
+            ).all()
+            if guest_playlist_ids:
+                db.query(PlaylistTrack).filter(
+                    PlaylistTrack.playlist_id.in_(guest_playlist_ids),
+                    PlaylistTrack.track_id == track_id,
+                ).delete(synchronize_session=False)
+            db.commit()
+        return {"ok": True, "hidden": True}
     storage.delete(track.stored_path)
     db.query(PlaylistTrack).filter(PlaylistTrack.track_id == track_id).delete()
     db.query(Favorite).filter(Favorite.track_id == track_id).delete()
@@ -1183,8 +1427,8 @@ def delete_track(
 
 @app.post("/api/favorites/{track_id}")
 def add_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
-    track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
-    if not track:
+    track = db.scalar(select(Track).where(Track.id == track_id))
+    if not track or is_track_hidden(db, user, track_id):
         raise HTTPException(status_code=404, detail="Track not found")
     exists = db.scalar(select(Favorite).where(Favorite.user_id == user.id, Favorite.track_id == track_id))
     if not exists:
@@ -1196,7 +1440,13 @@ def add_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], use
 @app.get("/api/favorites")
 def list_favorites(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     ids = db.scalars(select(Favorite.track_id).where(Favorite.user_id == user.id))
-    tracks = db.scalars(select(Track).where(Track.id.in_(list(ids)), Track.user_id == user.id))
+    hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
+    tracks = db.scalars(
+        select(Track).where(
+            Track.id.in_(list(ids)),
+            Track.id.not_in(hidden_ids),
+        )
+    )
     return [track_to_dict(track) for track in tracks]
 
 
