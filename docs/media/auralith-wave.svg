@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="52" viewBox="0 0 360 52" role="img" aria-labelledby="title description">
+  <title id="title">Auralith audio waveform</title>
+  <desc id="description">A softly animated purple audio equalizer.</desc>
+  <defs>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#B58AFF"/>
+      <stop offset="1" stop-color="#4C30C8"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#wave)">
+    <rect x="14" y="21" width="6" height="10" rx="3"><animate attributeName="height" values="10;22;10" dur="1.2s" begin="-0.1s" repeatCount="indefinite"/><animate attributeName="y" values="21;15;21" dur="1.2s" begin="-0.1s" repeatCount="indefinite"/></rect>
+    <rect x="32" y="17" width="6" height="18" rx="3"><animate attributeName="height" values="18;30;18" dur="1.4s" begin="-0.8s" repeatCount="indefinite"/><animate attributeName="y" values="17;11;17" dur="1.4s" begin="-0.8s" repeatCount="indefinite"/></rect>
+    <rect x="50" y="12" width="6" height="28" rx="3"><animate attributeName="height" values="28;16;28" dur="1.1s" begin="-0.3s" repeatCount="indefinite"/><animate attributeName="y" values="12;18;12" dur="1.1s" begin="-0.3s" repeatCount="indefinite"/></rect>
+    <rect x="68" y="18" width="6" height="16" rx="3"><animate attributeName="height" values="16;28;16" dur="1.3s" begin="-1s" repeatCount="indefinite"/><animate attributeName="y" values="18;12;18" dur="1.3s" begin="-1s" repeatCount="indefinite"/></rect>
+    <rect x="86" y="10" width="6" height="32" rx="3"><animate attributeName="height" values="32;18;32" dur="1.5s" begin="-0.5s" repeatCount="indefinite"/><animate attributeName="y" values="10;17;10" dur="1.5s" begin="-0.5s" repeatCount="indefinite"/></rect>
+    <rect x="104" y="16" width="6" height="20" rx="3"><animate attributeName="height" values="20;32;20" dur="1.2s" begin="-0.9s" repeatCount="indefinite"/><animate attributeName="y" values="16;10;16" dur="1.2s" begin="-0.9s" repeatCount="indefinite"/></rect>
+    <rect x="122" y="7" width="6" height="38" rx="3"><animate attributeName="height" values="38;22;38" dur="1.4s" begin="-0.2s" repeatCount="indefinite"/><animate attributeName="y" values="7;15;7" dur="1.4s" begin="-0.2s" repeatCount="indefinite"/></rect>
+    <rect x="140" y="14" width="6" height="24" rx="3"><animate attributeName="height" values="24;38;24" dur="1.1s" begin="-0.7s" repeatCount="indefinite"/><animate attributeName="y" values="14;7;14" dur="1.1s" begin="-0.7s" repeatCount="indefinite"/></rect>
+    <rect x="158" y="5" width="6" height="42" rx="3"><animate attributeName="height" values="42;26;42" dur="1.6s" begin="-0.4s" repeatCount="indefinite"/><animate attributeName="y" values="5;13;5" dur="1.6s" begin="-0.4s" repeatCount="indefinite"/></rect>
+    <rect x="176" y="13" width="6" height="26" rx="3"><animate attributeName="height" values="26;40;26" dur="1.3s" begin="-1.1s" repeatCount="indefinite"/><animate attributeName="y" values="13;6;13" dur="1.3s" begin="-1.1s" repeatCount="indefinite"/></rect>
+    <rect x="194" y="8" width="6" height="36" rx="3"><animate attributeName="height" values="36;20;36" dur="1.2s" begin="-0.6s" repeatCount="indefinite"/><animate attributeName="y" values="8;16;8" dur="1.2s" begin="-0.6s" repeatCount="indefinite"/></rect>
+    <rect x="212" y="16" width="6" height="20" rx="3"><animate attributeName="height" values="20;34;20" dur="1.5s" begin="-0.3s" repeatCount="indefinite"/><animate attributeName="y" values="16;9;16" dur="1.5s" begin="-0.3s" repeatCount="indefinite"/></rect>
+    <rect x="230" y="11" width="6" height="30" rx="3"><animate attributeName="height" values="30;16;30" dur="1.1s" begin="-0.9s" repeatCount="indefinite"/><animate attributeName="y" values="11;18;11" dur="1.1s" begin="-0.9s" repeatCount="indefinite"/></rect>
+    <rect x="248" y="18" width="6" height="16" rx="3"><animate attributeName="height" values="16;28;16" dur="1.4s" begin="-0.5s" repeatCount="indefinite"/><animate attributeName="y" values="18;12;18" dur="1.4s" begin="-0.5s" repeatCount="indefinite"/></rect>
+    <rect x="266" y="12" width="6" height="28" rx="3"><animate attributeName="height" values="28;14;28" dur="1.3s" begin="-0.1s" repeatCount="indefinite"/><animate attributeName="y" values="12;19;12" dur="1.3s" begin="-0.1s" repeatCount="indefinite"/></rect>
+    <rect x="284" y="18" width="6" height="16" rx="3"><animate attributeName="height" values="16;26;16" dur="1.2s" begin="-0.7s" repeatCount="indefinite"/><animate attributeName="y" values="18;13;18" dur="1.2s" begin="-0.7s" repeatCount="indefinite"/></rect>
+    <rect x="302" y="21" width="6" height="10" rx="3"><animate attributeName="height" values="10;20;10" dur="1.5s" begin="-0.4s" repeatCount="indefinite"/><animate attributeName="y" values="21;16;21" dur="1.5s" begin="-0.4s" repeatCount="indefinite"/></rect>
+    <rect x="320" y="22" width="6" height="8" rx="3"><animate attributeName="height" values="8;16;8" dur="1.1s" begin="-0.8s" repeatCount="indefinite"/><animate attributeName="y" values="22;18;22" dur="1.1s" begin="-0.8s" repeatCount="indefinite"/></rect>
+  </g>
+</svg>

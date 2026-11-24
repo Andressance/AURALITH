@@ -1,7 +1,10 @@
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone
+
+from PIL import Image
 
 os.environ["AURALITH_OWNER_USERNAME"] = "owner"
 os.environ["AURALITH_OWNER_PASSWORD"] = "TestPassword123!"
@@ -14,7 +17,7 @@ os.environ["AURALITH_STORAGE_DIR"] = str(DATA_DIR / "music")
 os.environ["AURALITH_DB_URL"] = f"sqlite:///{DATA_DIR / 'test.db'}"
 
 from fastapi.testclient import TestClient
-from apps.api.app import app, Track, SessionLocal, storage, normalize_utc
+from apps.api.app import app, Playlist, Track, SessionLocal, storage, normalize_utc, optimize_image
 
 client = TestClient(app)
 
@@ -192,6 +195,91 @@ def test_security_headers_are_present():
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_image_responses_allow_private_browser_caching():
+    login()
+    image_buffer = BytesIO()
+    Image.new("RGB", (1600, 900), color=(80, 40, 120)).save(image_buffer, format="PNG")
+    image = image_buffer.getvalue()
+
+    playlist = client.post("/api/playlists", json={"name": "Cached cover"})
+    playlist_id = playlist.json()["id"]
+    uploaded_cover = client.post(
+        f"/api/playlists/{playlist_id}/cover",
+        files={"file": ("cover.png", image, "image/png")},
+    )
+    assert uploaded_cover.status_code == 200
+    first_cover_url = uploaded_cover.json()["cover_url"]
+    assert uploaded_cover.json()["content_type"] == "image/webp"
+    playlist_cover = client.get(first_cover_url)
+    assert playlist_cover.headers["Cache-Control"] == "private, max-age=86400"
+    assert playlist_cover.headers["content-type"] == "image/webp"
+    with Image.open(BytesIO(playlist_cover.content)) as optimized_cover:
+        assert optimized_cover.size == (512, 288)
+
+    replacement = BytesIO()
+    Image.new("RGB", (320, 320), color=(120, 40, 80)).save(replacement, format="PNG")
+    updated_cover = client.post(
+        f"/api/playlists/{playlist_id}/cover",
+        files={"file": ("cover.png", replacement.getvalue(), "image/png")},
+    )
+    assert updated_cover.status_code == 200
+    assert updated_cover.json()["cover_url"] != first_cover_url
+
+    cover_key = "cache-test-cover.webp"
+    storage.upload(cover_key, playlist_cover.content, "image/webp")
+    with SessionLocal() as db:
+        from apps.api.app import User
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Cached cover test",
+            sha256="cached-cover-test",
+            file_name="cached-cover-test.mp3",
+            stored_path="cached-cover-test.mp3",
+            mime_type="audio/mpeg",
+            cover_path=cover_key,
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    track_cover = client.get(f"/api/tracks/{track_id}/cover")
+    assert track_cover.headers["Cache-Control"] == "private, max-age=86400"
+
+
+def test_image_optimizer_rejects_oversized_dimensions():
+    oversized_ppm_header = b"P6\n5000 4000\n255\n"
+    try:
+        optimize_image(oversized_ppm_header)
+    except ValueError as error:
+        assert "dimensions" in str(error)
+    else:
+        raise AssertionError("Oversized artwork dimensions should be rejected")
+
+
+def test_legacy_playlist_cover_is_migrated_on_first_access():
+    login()
+    image_buffer = BytesIO()
+    Image.new("RGB", (1600, 900), color=(60, 90, 120)).save(image_buffer, format="PNG")
+    legacy_path = "playlist-covers/legacy-cover.png"
+    storage.upload(legacy_path, image_buffer.getvalue(), "image/png")
+    playlist_id = client.post("/api/playlists", json={"name": "Legacy cover"}).json()["id"]
+
+    with SessionLocal() as db:
+        playlist = db.get(Playlist, playlist_id)
+        playlist.cover_path = legacy_path
+        db.commit()
+
+    cover = client.get(f"/api/playlists/{playlist_id}/cover?v=legacy-cover")
+    assert cover.status_code == 200
+    assert cover.headers["content-type"] == "image/webp"
+    assert cover.headers["Cache-Control"] == "private, max-age=86400"
+    assert not storage.exists(legacy_path)
+    with SessionLocal() as db:
+        playlist = db.get(Playlist, playlist_id)
+        assert playlist.cover_path.endswith(".webp")
 
 
 def login_rate_limiter_reset():

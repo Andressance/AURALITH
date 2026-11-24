@@ -1,14 +1,29 @@
-# AURALITH
+<div align="center">
+  <img src="apps/web/public/auralith-logo.svg" width="430" alt="Auralith — Your music. Your rules.">
+  <br>
+  <img src="docs/media/auralith-wave.svg" width="360" alt="Equalizador animado">
+  <h3>Tu música. Tu servidor. Tus reglas.</h3>
+  <p>Tu biblioteca musical, alojada por ti y diseñada para crecer sin perder el control.</p>
+  <p><strong>Idioma / Language:</strong> <a href="#english">🇬🇧 English</a> · <a href="#espanol">🇪🇸 Español</a></p>
+  <p>
+    <a href="#quick-start">Empezar</a> ·
+    <a href="#arquitectura-de-un-vistazo">Arquitectura</a> ·
+    <a href="#seguridad-ligera-por-diseño">Seguridad</a> ·
+    <a href="#26-roadmap">Roadmap</a>
+  </p>
+  <sub>SELF-HOSTED · OPEN SOURCE · PRIVACY FIRST · MODULAR</sub>
+</div>
 
-# Personal Music Cloud
+<br>
 
-> **Tu música. Tu servidor. Tus reglas.**
->
-> **Your music. Your server. Your rules.**
+> **Ahora:** MVP personal, ligero y autoalojado. **Visión:** una red musical federada, sin servidor central obligatorio.
+> La federación y el procesamiento avanzado que se describen abajo son objetivos de diseño, no funciones disponibles en el MVP actual.
+
+<a id="english"></a>
 
 ## English
 
-AURALITH is a self-hosted, open-source platform for storing and playing a personal music library. The MVP is designed for one owner: secure login, private MP3/FLAC uploads, metadata extraction, playlists, favorites, HTTP Range playback, SQLite backups/restores, and Docker deployment.
+AURALITH is a self-hosted, open-source platform for storing and playing a personal music library. The current MVP focuses on one owner: secure login, private MP3/FLAC uploads, metadata extraction, playlists, favorites, HTTP Range playback, SQLite backups/restores, and Docker deployment.
 
 ### Quick start
 
@@ -33,17 +48,18 @@ The backend is not coupled to Supabase or to a local installation:
 
 ### MVP scope
 
-- One owner account
+- Owner-managed multi-user accounts, invitations, and account activation
 - Password authentication with Argon2 and HTTP-only sessions
 - MP3 and FLAC uploads
 - Mutagen metadata extraction
-- Owner-only library isolation
+- Album artwork normalized to WebP thumbnails up to 512 px
+- Private, per-user library isolation
 - Range-based audio streaming
 - Playlists and favorites
 - ZIP backup and SQLite restore
 - Docker Compose deployment
 
-The detailed architecture, security model, roadmap, and future federation design remain in Spanish below.
+This describes the working core of the first MVP, not completion of every feature in the broader V1 acceptance checklist below.
 
 ### Neon database and storage
 
@@ -102,7 +118,50 @@ AURALITH_OWNER_PASSWORD="change-this-password" docker compose up --build
 
 Open `http://localhost:8080`. The SQLite database and music files are stored in the `auralith-data` Docker volume.
 
+## Arquitectura de un vistazo
+
+### MVP actual · modular y ligero
+
+La aplicación mantiene una API monolítica modular y permite elegir proveedores de base de datos y almacenamiento. El diagrama muestra los componentes y opciones del MVP; no implica que todos los proveedores estén activos a la vez.
+
+```mermaid
+flowchart LR
+    U[Persona usuaria] -->|HTTPS / HTTP| W[Web · Svelte 5 + Vite]
+    W -->|API + sesión| A[API · FastAPI]
+    A --> D[(SQLAlchemy<br/>SQLite o PostgreSQL)]
+    A --> S{Abstracción<br/>de almacenamiento}
+    S --> L[Disco local]
+    S --> O[Object storage<br/>compatible]
+    A --> M[Metadata<br/>Mutagen]
+```
+
+### Visión V2 · federación sin replicar audio
+
+Cada instancia conserva su biblioteca y sus archivos. La federación intercambia identidad, metadatos y permisos; el audio se solicita al servidor de origen solo durante la reproducción autorizada.
+
+```mermaid
+flowchart LR
+    subgraph A["Instancia A · origen"]
+        UA[Persona A]
+        MA[Identidad + metadata]
+        FA[(Audio de A)]
+        UA --> MA
+    end
+    subgraph B["Instancia B · quien escucha"]
+        UB[Persona B]
+        MB[Identidad + metadata remota]
+        UB --> MB
+    end
+    MA <-->|Identidad · permisos · solicitudes autenticadas| MB
+    MB -->|Autorización temporal para reproducir| MA
+    FA -.->|Stream autorizado · sin copia permanente| UB
+```
+
+> **La federación es una dirección futura.** Autenticación entre instancias, permisos remotos y streaming federado deben diseñarse e implementarse antes de habilitar este flujo.
+
 ---
+
+<a id="espanol"></a>
 
 ## Español
 
@@ -997,169 +1056,121 @@ Cada recurso deberá comprobar sus permisos independientemente de la amistad.
 
 # 20. Seguridad
 
-La seguridad será uno de los pilares del proyecto.
+La seguridad debe proteger la biblioteca sin convertir una instancia pequeña en una plataforma que necesite infraestructura pesada para funcionar. **Render Free es una referencia de eficiencia para las funciones básicas, no un límite al que deban quedar atadas las instalaciones con más recursos.**
 
-## Authentication
+## Seguridad ligera por diseño
 
-- Hash de contraseñas mediante Argon2id.
-- Sesiones seguras.
-- Refresh token rotation.
-- Revocación de sesiones.
-- Rate limiting.
-- Protección contra brute force.
-- Password recovery seguro.
+> **Política de arquitectura:** Auralith prioriza controles de coste acotado y, en la federación futura, el intercambio de metadatos y el streaming remoto autorizado frente a replicar medios. Los archivos remotos no se descargarán ni almacenarán automáticamente. El antivirus, el sandboxing y el análisis avanzado podrán ser capacidades opcionales para despliegues con recursos adicionales.
 
-## Authorization
+Esta política describe el objetivo arquitectónico; **no afirma que la federación o todas las protecciones propuestas ya estén implementadas**. Los controles del MVP se resumen en [SECURITY.md](SECURITY.md).
 
-- RLS.
-- Ownership validation.
-- Instance membership validation.
-- Resource permission checks.
-- Deny by default.
+### Compartir referencias, no copias
 
-## Secrets
+En una futura federación, la instancia receptora guardará una referencia remota —por ejemplo, identificador, título, artista, duración, origen y permiso—, no una copia del archivo.
 
-Los siguientes elementos nunca se expondrán al frontend:
+```mermaid
+sequenceDiagram
+    participant B as Instancia B
+    participant A as Instancia A · origen
+    participant P as Reproductor
+    B->>A: Solicitar reproducción de una referencia remota
+    A->>A: Verificar identidad, permiso y disponibilidad
+    A-->>B: Conceder autorización temporal
+    B->>P: Entregar acceso al stream autorizado
+    A-->>P: Audio en streaming, sin réplica permanente en B
+```
 
-- Service role keys.
-- OAuth secrets.
-- Encryption keys.
-- Internal secrets.
+La autorización temporal y el protocolo federado son requisitos de diseño pendientes, no una API disponible hoy. Este enfoque puede reducir almacenamiento, tráfico de ingestión, duplicados, trabajo de escaneo y complejidad de backups. **No elimina el riesgo del audio remoto:** el reproductor y sus decodificadores siguen procesando contenido externo. Se necesitarán formatos permitidos, software actualizado, límites y controles de confianza; el streaming no es una garantía de que el contenido sea seguro.
 
-## OAuth
+### Ingestión asíncrona y acotada
 
-- State anti-CSRF.
-- Validación de redirects.
-- Scopes mínimos.
-- Tokens cifrados.
-- Rotación cuando corresponda.
+El procesamiento intensivo no debe bloquear el reproductor ni las peticiones normales. Como objetivo de arquitectura, las tareas de importación se encolarán y procesarán con concurrencia baja y límites explícitos; el MVP no requiere antivirus, transcodificación ni una flota de workers.
 
-## Storage
+```mermaid
+flowchart LR
+    I[Subida o importación] --> Q[Cola limitada]
+    Q --> W[Worker único o<br/>concurrencia reducida]
+    W --> V[Validar formato y tamaño]
+    W --> H[Calcular hash]
+    W --> M[Extraer metadata limitada]
+    W --> C[Validar artwork]
+    V --> R[Guardar resultado]
+    H --> R
+    M --> R
+    C --> R
+    R --> D[(Almacenamiento)]
+```
 
-- Buckets privados.
-- Signed URLs.
-- TTL.
-- Validación de permisos.
-- No listar archivos privados.
-- No registrar URLs firmadas.
+Límites deseables: concurrencia, duración, memoria y tamaño máximos; reintentos controlados; y cola de espera cuando el servidor esté ocupado. La reproducción y el uso normal de la API deben tener prioridad. Estos límites forman parte del diseño objetivo y deben implementarse y probarse en el flujo de jobs antes de depender de ellos.
 
-## Uploads
+### Controles según recursos
 
-- Validación de formatos.
-- Validación de tamaño.
-- Validación real del contenido.
-- Metadata sanitizada.
-- SHA256.
-- Límites de procesamiento.
-- No ejecutar archivos.
-- Protección contra archivos maliciosos.
+| Nivel | Entorno orientativo | Enfoque |
+|---|---|---|
+| **1 · Lightweight** | Render Free / instancia pequeña | Límites y validaciones básicas, hashes, metadata acotada, rate limiting; sin antivirus pesado, transcodificación o replicación por defecto. |
+| **2 · Hardened** | VPS o NAS con recursos adicionales | Análisis antivirus opcional, sandbox de procesamiento, caché controlada y más workers. |
+| **3 · High Security** | Despliegue que prioriza aislamiento | Procesamiento aislado, reglas de federación restrictivas, auditoría, allowlist de instancias y revisión manual del contenido compartido. |
 
-## SSRF
+| Control | Coste relativo | Política |
+|---|---:|---|
+| HTTPS y autenticación entre instancias | Bajo | Obligatorio antes de federar |
+| Rate limiting y límites de tamaño | Bajo | Básico |
+| Validación de MIME y firma del formato | Bajo | Básico; no confiar solo en la extensión |
+| Hash SHA-256 y límites de metadata/artwork | Bajo | Básico |
+| Autorizaciones firmadas y de corta duración | Bajo | Para acceso remoto, cuando se implemente |
+| Antivirus completo y sandbox por archivo | Medio/alto | Opcional según despliegue |
+| Re-encode y réplica automática de audio | Alto | No por defecto |
+| Caché federada de audio | Variable | Opcional y futura |
 
-Las integraciones que acepten URLs deberán bloquear:
+### Identidad, autenticación y permisos
 
-- Localhost.
-- Redes privadas.
-- Link-local.
-- Servicios internos.
-- Redirects peligrosos.
+- **MVP actual:** contraseñas con Argon2id, cookies de sesión HTTP-only, caducidad de sesión, rate limiting de acceso, comprobaciones de origen y separación por propietario, según los controles descritos en [SECURITY.md](SECURITY.md).
+- **Federación futura:** autenticación mutua entre instancias, solicitudes firmadas, protección contra repetición, límites de tasa y validación de permisos en cada recurso.
+- La amistad o la existencia de una identidad remota nunca concede por sí sola acceso a una biblioteca.
+- Aplicar mínimo privilegio y denegar por defecto. Verificar los permisos en el servidor, no confiar en IDs ni autorizaciones declaradas por el cliente.
+- No exponer claves de servicio, secretos OAuth ni claves internas al frontend.
 
-## Logs
+### Archivos, almacenamiento e integraciones
 
-Se evitará registrar:
+- Limitar tamaño, formatos, metadata y artwork; validar el contenido real además de la extensión.
+- Sanitizar metadata y nombres. No ejecutar archivos subidos.
+- Mantener almacenamiento privado y validar autorización antes de servir archivos.
+- Usar hashes para identificar contenido; no confundir un hash con un análisis antivirus.
+- Las integraciones que acepten URLs deben bloquear localhost, redes privadas, link-local, servicios internos y redirecciones peligrosas para reducir SSRF.
+- No registrar contraseñas, tokens, credenciales, URLs firmadas ni metadata personal innecesaria.
 
-- Contraseñas.
-- Tokens.
-- URLs firmadas.
-- Credenciales.
-- Metadata personal innecesaria.
+### Controles existentes en el MVP
+
+El MVP ya incluye controles descritos en [SECURITY.md](SECURITY.md), entre ellos hashing Argon2id, sesiones HTTP-only, límite de subida, validación de MP3/FLAC, rate limiting de login y límites para restauración ZIP. Consulta ese archivo para los requisitos de despliegue y las verificaciones antes de publicar; **no presupongas que las funciones futuras de federación o sandbox están disponibles**.
 
 ---
 
 # 21. Arquitectura técnica
 
-## Estrategia
+## Stack actual del MVP
 
-Se comenzará con un **Modular Monolith**.
+El MVP está implementado como un **monolito modular**. No requiere microservicios ni una cola de workers dedicada para el uso básico; los proveedores de datos y almacenamiento se configuran sin acoplar la API a un único servicio.
 
-No se utilizarán microservicios desde el inicio.
-
-Los módulos tendrán:
-
-- Interfaces.
-- Contratos.
-- Dependencias controladas.
-- Responsabilidades claras.
-
-Se podrán extraer servicios en el futuro si existe una necesidad real.
-
-## Frontend
-
-```text
-SvelteKit
-Svelte
-TypeScript
-PWA
-```
-
-## Backend
-
-```text
-Python
-FastAPI
-Pydantic
-asyncio
-SQLAlchemy
-```
-
-## Database
-
-```text
-PostgreSQL
-```
-
-## Storage
-
-```text
-Supabase Storage
-```
-
-## Authentication
-
-```text
-Supabase Auth
-```
-
-o una implementación propia compatible con la arquitectura de sesiones definida, según las necesidades finales de seguridad y control.
-
-## Metadata
-
-```text
-Mutagen
-```
-
-## Audio processing
-
-```text
-FFmpeg
-FFprobe
-```
-
-Solo se utilizarán cuando sea necesario.
-
-## Deployment inicial
-
-| Componente | Tecnología |
+| Componente | Implementación actual |
 |---|---|
-| Frontend | Vercel |
-| Backend | Render |
-| Database | Supabase PostgreSQL |
-| Authentication | Supabase Auth / capa de autenticación |
-| Storage | Supabase Storage |
-| CI/CD | GitHub Actions |
-| Repository | GitHub |
+| Frontend | Svelte 5 + Vite |
+| API | Python + FastAPI |
+| Acceso a datos | SQLAlchemy |
+| Base de datos | SQLite por defecto; PostgreSQL configurable |
+| Almacenamiento | Local, Supabase Storage o backend S3-compatible |
+| Contraseñas y sesiones | Argon2id y sesiones HTTP-only |
+| Metadata de audio | Mutagen |
+| Desarrollo local | Docker Compose |
 
-La arquitectura deberá ser capaz de evolucionar hacia un despliegue Docker self-hosted.
+El despliegue puede usar SQLite y almacenamiento local en Docker, o separar frontend, API, base de datos y almacenamiento usando los proveedores configurados. Consulta la guía de despliegue en inglés al principio de este documento.
+
+## Evolución prevista
+
+- Mantener los límites modulares y extraer servicios solo si hay una necesidad operativa demostrable.
+- Ejecutar importación y análisis en jobs con límites de concurrencia, memoria, tamaño y tiempo; no convertir workers adicionales en requisito de una instancia pequeña.
+- Mantener FFmpeg, antivirus, sandboxing y caché como capacidades opcionales cuando el caso de uso y los recursos lo justifiquen.
+- Añadir protocolos de identidad y compartición federada solo después de definir autenticación entre instancias, autorización, límites y protección contra abuso.
+- Permitir que cada instancia opere de forma independiente, sin dependencia obligatoria de infraestructura central.
 
 ---
 
@@ -1206,9 +1217,9 @@ Personal Music Cloud
 
 # 23. Jobs
 
-Los procesos pesados no se ejecutarán directamente en peticiones HTTP.
+El procesamiento asíncrono es una capacidad prevista para importaciones y operaciones costosas; no es una dependencia del MVP ligero. Cuando se implemente, los procesos pesados no se ejecutarán directamente en peticiones HTTP.
 
-Se utilizará un sistema persistente de jobs.
+Se buscará utilizar un sistema persistente de jobs con reintentos, cancelación, progreso y ejecución idempotente.
 
 ## Jobs
 
@@ -1243,7 +1254,7 @@ El sistema deberá soportar:
 - Idempotency.
 - Concurrency limits.
 
-Inicialmente se podrá implementar sobre PostgreSQL.
+La cola podrá apoyarse inicialmente en la base de datos configurada, evitando incorporar un servicio dedicado mientras no sea necesario.
 
 ---
 
@@ -1656,7 +1667,7 @@ El desarrollo podrá distribuirse entre agentes especializados.
 
 ## Agent 3 — Frontend & UX
 
-- SvelteKit.
+- Svelte 5 + Vite.
 - UI.
 - Navigation.
 - Library.

@@ -695,8 +695,8 @@ button { cursor: pointer; }
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #1ed760;
-  color: #08240f;
+  background: #8b5cf6;
+  color: #fff;
   font-size: 18px;
   box-shadow: 0 8px 18px #000;
   opacity: 0;
@@ -761,10 +761,11 @@ button { cursor: pointer; }
 .now-playing strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .now-playing span { color: #aaa; font-size: 12px; }
 .player-center { display: grid; justify-items: center; gap: 5px; }
-.player-toggle { width: 32px; height: 32px; border: 0; border-radius: 50%; background: #fff; color: #111; }
+.player-toggle { width: 32px; height: 32px; border: 0; border-radius: 50%; background: #8b5cf6; color: #fff; transition: background .16s; }
+.player-toggle:hover { background: #a78bfa; }
 .timeline { width: 100%; display: grid; grid-template-columns: 38px 1fr 38px; align-items: center; gap: 8px; }
 .timeline span { color: #a7a7a7; font-size: 11px; text-align: center; }
-input[type="range"] { accent-color: #fff; }
+input[type="range"] { accent-color: #8b5cf6; }
 .volume { width: 120px; justify-self: end; }
 .profile-button img {
   width: 30px;

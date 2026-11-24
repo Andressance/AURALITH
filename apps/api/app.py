@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -8,19 +10,24 @@ import tempfile
 import zipfile
 import re
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Annotated
+from io import BytesIO
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Callable
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
 from PIL import Image, ImageOps
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.orm import DeclarativeBase, Session
 from sqlalchemy import inspect, text
+
+logger = logging.getLogger(__name__)
+image_processing_semaphore = asyncio.Semaphore(1)
 
 try:
     from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
@@ -257,7 +264,8 @@ async def security_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
-    response.headers["Cache-Control"] = "no-store"
+    if "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = "no-store"
     if request.url.scheme == "https" or os.getenv("AURALITH_ENV", "production").lower() == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -394,7 +402,10 @@ def me(user: Annotated[User, Depends(current_user)]):
         "username": user.username,
         "display_name": getattr(user, "display_name", None) or user.username,
         "role": user.role,
-        "avatar_url": f"/api/profile/avatar" if getattr(user, "avatar_path", None) else None,
+        "avatar_url": versioned_image_url(
+            "/api/profile/avatar",
+            Path(user.avatar_path).stem if getattr(user, "avatar_path", None) else None,
+        ),
     }
 
 
@@ -514,18 +525,31 @@ async def update_profile_avatar(
 
 
 @app.get("/api/profile/avatar")
-def profile_avatar(
+async def profile_avatar(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    return image_response(getattr(user, "avatar_path", None), "Avatar not found")
+    def save_path(path: str) -> None:
+        user.avatar_path = path
+        db.commit()
+
+    return await image_response(
+        getattr(user, "avatar_path", None),
+        "Avatar not found",
+        save_path,
+    )
 
 
 async def update_avatar(file: UploadFile, db: Session, user: User):
+    previous_path = user.avatar_path
     path, content_type = await upload_profile_image(file, f"avatars/{user.id}")
     user.avatar_path = path
     db.commit()
-    return {"avatar_url": "/api/profile/avatar", "content_type": content_type}
+    delete_replaced_image(previous_path, path)
+    return {
+        "avatar_url": versioned_image_url("/api/profile/avatar", Path(path).stem),
+        "content_type": content_type,
+    }
 
 
 async def upload_profile_image(file: UploadFile, key_prefix: str) -> tuple[str, str]:
@@ -542,14 +566,101 @@ async def upload_profile_image(file: UploadFile, key_prefix: str) -> tuple[str, 
         raise HTTPException(status_code=400, detail="Invalid PNG image")
     if content_type == "image/webp" and not (len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"):
         raise HTTPException(status_code=400, detail="Invalid WebP image")
-    path = f"{key_prefix}{suffix}"
-    storage.upload(path, content, content_type)
-    return path, content_type
+    try:
+        optimized_content = await optimize_image_with_limit(content)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    path = f"{key_prefix}/{secrets.token_hex(16)}.webp"
+    storage.upload(path, optimized_content, "image/webp")
+    return path, "image/webp"
 
 
-def image_response(path: str | None, not_found: str):
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_PIXELS = 16_000_000
+OPTIMIZED_IMAGE_SIZE = (512, 512)
+
+
+def optimize_image(content: bytes) -> bytes:
+    if not content or len(content) > MAX_IMAGE_BYTES:
+        raise ValueError("Image exceeds the 5 MB limit")
+
+    try:
+        with Image.open(BytesIO(content)) as source:
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise ValueError("Image dimensions exceed the supported limit")
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(OPTIMIZED_IMAGE_SIZE, Image.Resampling.LANCZOS)
+            mode = "RGBA" if "A" in image.getbands() or "transparency" in image.info else "RGB"
+            image = image.convert(mode)
+            output = BytesIO()
+            image.save(output, format="WEBP", quality=80, method=4)
+            return output.getvalue()
+    except (Image.DecompressionBombError, OSError) as error:
+        raise ValueError("Image is invalid or cannot be safely processed") from error
+
+
+async def optimize_image_with_limit(content: bytes) -> bytes:
+    async with image_processing_semaphore:
+        return await run_in_threadpool(optimize_image, content)
+
+
+def versioned_image_url(url: str, revision: str | int | None) -> str | None:
+    if revision is None:
+        return None
+    return f"{url}?v={revision}"
+
+
+def delete_replaced_image(previous_path: str | None, current_path: str) -> None:
+    if not previous_path or previous_path == current_path:
+        return
+    try:
+        storage.delete(previous_path)
+    except Exception:
+        logger.warning("Unable to remove replaced image: %s", previous_path, exc_info=True)
+
+
+def is_missing_storage_object(error: Exception) -> bool:
+    code = getattr(error, "response", {}).get("Error", {}).get("Code")
+    return isinstance(error, (FileNotFoundError, KeyError)) or code in {
+        "NoSuchKey",
+        "404",
+        "NotFound",
+    }
+
+
+async def image_response(
+    path: str | None,
+    not_found: str,
+    save_path: Callable[[str], None],
+):
     if not path:
         raise HTTPException(status_code=404, detail=not_found)
+
+    if Path(path).suffix.lower() != ".webp":
+        try:
+            with storage.open(path) as source:
+                content = source.read(MAX_IMAGE_BYTES + 1)
+            optimized_content = await optimize_image_with_limit(content)
+        except ValueError as error:
+            logger.warning("Keeping legacy image %s without optimization: %s", path, error)
+        except Exception as error:
+            if is_missing_storage_object(error):
+                raise HTTPException(status_code=404, detail=not_found) from error
+            raise HTTPException(status_code=503, detail="Image temporarily unavailable") from error
+        else:
+            optimized_path = str(PurePosixPath(path).with_suffix(".webp"))
+            try:
+                storage.upload(optimized_path, optimized_content, "image/webp")
+                save_path(optimized_path)
+            except Exception as error:
+                raise HTTPException(status_code=503, detail="Image temporarily unavailable") from error
+            delete_replaced_image(path, optimized_path)
+            return Response(
+                content=optimized_content,
+                media_type="image/webp",
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
+
     try:
         suffix = Path(path).suffix.lower()
         media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
@@ -560,7 +671,9 @@ def image_response(path: str | None, not_found: str):
             headers={"Cache-Control": "private, max-age=86400"},
         )
     except Exception as error:
-        raise HTTPException(status_code=404, detail=not_found) from error
+        if is_missing_storage_object(error):
+            raise HTTPException(status_code=404, detail=not_found) from error
+        raise HTTPException(status_code=503, detail="Image temporarily unavailable") from error
 
 
 ALLOWED_SUFFIXES = {".mp3": "audio/mpeg", ".flac": "audio/flac"}
@@ -669,12 +782,15 @@ async def upload_track(
         raise HTTPException(status_code=400, detail="Invalid or unreadable audio file")
     cover_path = None
     if cover:
-        cover_bytes, cover_suffix = cover
-        cover_path = f"covers/{digest}{cover_suffix}"
         try:
-            cover_content_type = ALLOWED_IMAGE_SUFFIXES[cover_suffix]
-            storage.upload(cover_path, cover_bytes, cover_content_type)
+            cover_bytes = await optimize_image_with_limit(cover[0])
+            cover_path = f"covers/{digest}.webp"
+            storage.upload(cover_path, cover_bytes, "image/webp")
+        except ValueError as error:
+            logger.warning("Skipping invalid or oversized embedded artwork: %s", error)
+            cover_path = None
         except Exception:
+            logger.exception("Unable to store embedded artwork for track %s", digest)
             cover_path = None
     track = Track(
         user_id=user.id,
@@ -706,7 +822,10 @@ def track_to_dict(track: Track):
         "genre": track.genre,
         "duration": track.duration,
         "file_name": track.file_name,
-        "cover_url": f"/api/tracks/{track.id}/cover" if getattr(track, "cover_path", None) else None,
+        "cover_url": versioned_image_url(
+            f"/api/tracks/{track.id}/cover",
+            track.id if getattr(track, "cover_path", None) else None,
+        ),
     }
 
 
@@ -717,7 +836,7 @@ def list_tracks(db: Annotated[Session, Depends(db_session)], user: Annotated[Use
 
 
 @app.get("/api/tracks/{track_id}/cover")
-def track_cover(
+async def track_cover(
     track_id: int,
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
@@ -725,22 +844,12 @@ def track_cover(
     track = db.scalar(select(Track).where(Track.id == track_id, Track.user_id == user.id))
     if not track or not getattr(track, "cover_path", None):
         raise HTTPException(status_code=404, detail="Cover not found")
-    try:
-        source = storage.open(track.cover_path)
-        suffix = Path(track.cover_path).suffix.lower()
-        media_type = ALLOWED_IMAGE_SUFFIXES.get(suffix, "application/octet-stream")
-        return StreamingResponse(
-            source,
-            media_type=media_type,
-            headers={"Cache-Control": "private, max-age=86400"},
-        )
-    except (FileNotFoundError, KeyError):
-        raise HTTPException(status_code=404, detail="Cover not found")
-    except Exception as error:
-        code = getattr(error, "response", {}).get("Error", {}).get("Code")
-        if code in {"NoSuchKey", "404", "NotFound"}:
-            raise HTTPException(status_code=404, detail="Cover not found") from error
-        raise HTTPException(status_code=503, detail="Cover temporarily unavailable") from error
+
+    def save_path(path: str) -> None:
+        track.cover_path = path
+        db.commit()
+
+    return await image_response(track.cover_path, "Cover not found", save_path)
 
 
 @app.get("/api/search")
@@ -844,7 +953,10 @@ def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[
     return [{
         "id": p.id,
         "name": p.name,
-        "cover_url": f"/api/playlists/{p.id}/cover" if getattr(p, "cover_path", None) else None,
+        "cover_url": versioned_image_url(
+            f"/api/playlists/{p.id}/cover",
+            Path(p.cover_path).stem if getattr(p, "cover_path", None) else None,
+        ),
     } for p in playlists]
 
 
@@ -900,7 +1012,10 @@ def get_playlist(
     return {
         "id": playlist.id,
         "name": playlist.name,
-        "cover_url": f"/api/playlists/{playlist.id}/cover" if getattr(playlist, "cover_path", None) else None,
+        "cover_url": versioned_image_url(
+            f"/api/playlists/{playlist.id}/cover",
+            Path(playlist.cover_path).stem if getattr(playlist, "cover_path", None) else None,
+        ),
         "tracks": [track_to_dict(tracks_by_id[track_id]) for track_id in track_ids if track_id in tracks_by_id],
     }
 
@@ -915,14 +1030,22 @@ async def update_playlist_cover(
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
+    previous_path = playlist.cover_path
     path, content_type = await upload_profile_image(file, f"playlist-covers/{playlist.id}")
     playlist.cover_path = path
     db.commit()
-    return {"cover_url": f"/api/playlists/{playlist.id}/cover", "content_type": content_type}
+    delete_replaced_image(previous_path, path)
+    return {
+        "cover_url": versioned_image_url(
+            f"/api/playlists/{playlist.id}/cover",
+            Path(path).stem,
+        ),
+        "content_type": content_type,
+    }
 
 
 @app.get("/api/playlists/{playlist_id}/cover")
-def playlist_cover(
+async def playlist_cover(
     playlist_id: int,
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
@@ -930,7 +1053,16 @@ def playlist_cover(
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    return image_response(getattr(playlist, "cover_path", None), "Playlist cover not found")
+
+    def save_path(path: str) -> None:
+        playlist.cover_path = path
+        db.commit()
+
+    return await image_response(
+        getattr(playlist, "cover_path", None),
+        "Playlist cover not found",
+        save_path,
+    )
 
 
 @app.delete("/api/playlists/{playlist_id}")

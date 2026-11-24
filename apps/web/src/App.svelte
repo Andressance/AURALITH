@@ -70,7 +70,8 @@
 
   function assetUrl(path) {
     if (!path) return "";
-    const token = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
+    const separator = path.includes("?") ? "&" : "?";
+    const token = sessionToken ? `${separator}token=${encodeURIComponent(sessionToken)}` : "";
     return `${API_BASE}${path}${token}`;
   }
 
@@ -440,7 +441,7 @@
   function updateMediaSession(track) {
     if (!("mediaSession" in navigator) || !track) return;
     const artwork = track.cover_url
-      ? [{ src: assetUrl(track.cover_url), sizes: "512x512", type: "image/jpeg" }]
+      ? [{ src: assetUrl(track.cover_url), sizes: "512x512", type: "image/webp" }]
       : [{ src: `${window.location.origin}/icon.svg`, sizes: "any", type: "image/svg+xml" }];
     navigator.mediaSession.metadata = new MediaMetadata({
       title: text(track.title, "Canción sin título"),
