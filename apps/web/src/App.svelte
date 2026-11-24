@@ -17,7 +17,8 @@
   let isPlaying = false;
   let progress = 0;
   let duration = 0;
-  let volume = 0.8;
+  let savedVolume = Number(localStorage.getItem("auralith_volume") ?? 0.8);
+  let volume = !Number.isNaN(savedVolume) && savedVolume >= 0 && savedVolume <= 1 ? savedVolume : 0.8;
   let searchQuery = "";
   let visibleTracks = [];
   let selectedPlaylistId = null;
@@ -81,6 +82,15 @@
 
   window.addEventListener("popstate", () => {
     activeView = viewFromPath();
+  });
+
+  window.addEventListener("keydown", (event) => {
+    if (event.code === "Space" && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
+      if (currentTrack) {
+        event.preventDefault();
+        togglePlayback();
+      }
+    }
   });
 
   function text(value, fallback = "") {
@@ -610,6 +620,7 @@
     updateMediaSession(track);
     await tick();
     if (audio) {
+      audio.volume = volume;
       audio.load();
       try {
         await audio.play();
@@ -712,6 +723,9 @@
   function changeVolume(event) {
     volume = Number(event.currentTarget.value);
     if (audio) audio.volume = volume;
+    try {
+      localStorage.setItem("auralith_volume", String(volume));
+    } catch {}
   }
 
   function formatTime(seconds) {
@@ -1253,6 +1267,7 @@
           onloadedmetadata={(event) => duration = event.currentTarget.duration}
           onvolumechange={(event) => volume = event.currentTarget.volume}
           onended={handleTrackEnded}
+          onerror={() => { isPlaying = false; error = "No se pudo reproducir la canción"; }}
         ></audio>
       </footer>
     {/if}
