@@ -360,8 +360,20 @@
   }
 
   async function selectPlaylist(playlist) {
+    navigateView("library");
     selectedPlaylistId = playlist.id;
-    selectedPlaylist = await api(`/api/playlists/${playlist.id}`);
+    if (!selectedPlaylist || selectedPlaylist.id !== playlist.id) {
+      selectedPlaylist = {
+        id: playlist.id,
+        name: playlist.name,
+        cover_url: playlist.cover_url || null,
+        tracks: []
+      };
+    }
+    const detail = await api(`/api/playlists/${playlist.id}`);
+    if (selectedPlaylistId === playlist.id) {
+      selectedPlaylist = detail;
+    }
   }
 
   async function playPlaylist(playlist) {
@@ -422,32 +434,46 @@
   }
 
   async function addSelectedToPlaylist(playlistId) {
-    if (!selectedTrackIds.length) return;
-    await api(`/api/playlists/${playlistId}/tracks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ track_ids: selectedTrackIds })
-    });
+    const toAdd = [...selectedTrackIds];
+    if (!toAdd.length) return;
     selectedTrackIds = [];
     showPlaylistPicker = false;
-    await loadPlaylists();
+    try {
+      await api(`/api/playlists/${playlistId}/tracks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_ids: toAdd })
+      });
+      await loadPlaylists();
+      if (selectedPlaylistId === playlistId) {
+        selectedPlaylist = await api(`/api/playlists/${playlistId}`);
+      }
+    } catch (cause) {
+      error = cause.message;
+    }
   }
 
   async function createPlaylistWithSelection(event) {
     event.preventDefault();
-    if (!newPlaylistName.trim()) return;
-    await api("/api/playlists", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: newPlaylistName.trim(),
-        track_ids: selectedTrackIds
-      })
-    });
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    const toAdd = [...selectedTrackIds];
     newPlaylistName = "";
     selectedTrackIds = [];
     showPlaylistPicker = false;
-    await loadPlaylists();
+    try {
+      await api("/api/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          track_ids: toAdd
+        })
+      });
+      await loadPlaylists();
+    } catch (cause) {
+      error = cause.message;
+    }
   }
 
   async function removeFromPlaylist(track) {

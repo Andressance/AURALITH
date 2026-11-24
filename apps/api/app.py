@@ -109,8 +109,8 @@ class User(Base):
 class Session(Base):
     __tablename__ = "sessions"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    token_hash = Column(String, unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String, unique=True, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=False)
 
 
@@ -123,7 +123,7 @@ def normalize_utc(value: datetime) -> datetime:
 class Track(Base):
     __tablename__ = "tracks"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String, nullable=False)
     artist = Column(String)
     album = Column(String)
@@ -131,7 +131,7 @@ class Track(Base):
     genre = Column(String)
     duration = Column(Integer)
     isrc = Column(String)
-    sha256 = Column(String, unique=False, nullable=False)
+    sha256 = Column(String, unique=False, nullable=False, index=True)
     file_name = Column(String, nullable=False)
     stored_path = Column(String, nullable=False)
     mime_type = Column(String, nullable=False)
@@ -142,7 +142,7 @@ class Track(Base):
 class Playlist(Base):
     __tablename__ = "playlists"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
     cover_path = Column(String)
 
@@ -150,29 +150,29 @@ class Playlist(Base):
 class PlaylistTrack(Base):
     __tablename__ = "playlist_tracks"
     id = Column(Integer, primary_key=True)
-    playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
     position = Column(Integer, nullable=False)
 
 
 class Favorite(Base):
     __tablename__ = "favorites"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
 
 
 class HiddenTrack(Base):
     __tablename__ = "hidden_tracks"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
 
 
 class Invitation(Base):
     __tablename__ = "invitations"
     id = Column(Integer, primary_key=True)
-    code = Column(String, unique=True, nullable=False)
+    code = Column(String, unique=True, nullable=False, index=True)
     display_name = Column(String)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     expires_at = Column(DateTime, nullable=False)
@@ -208,6 +208,20 @@ def ensure_optional_columns():
                             f"ADD COLUMN {column_name} {column_type}"
                         )
                     )
+        indexes = (
+            ("idx_playlist_tracks_playlist_id", "playlist_tracks", "playlist_id"),
+            ("idx_playlist_tracks_track_id", "playlist_tracks", "track_id"),
+            ("idx_playlists_user_id", "playlists", "user_id"),
+            ("idx_hidden_tracks_user_id", "hidden_tracks", "user_id"),
+            ("idx_favorites_user_id", "favorites", "user_id"),
+            ("idx_tracks_user_id", "tracks", "user_id"),
+            ("idx_tracks_sha256", "tracks", "sha256"),
+        )
+        for idx_name, table, col in indexes:
+            try:
+                connection.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({col})"))
+            except Exception:
+                pass
 
 
 ensure_optional_columns()
@@ -1228,6 +1242,17 @@ def get_playlist(
         .order_by(PlaylistTrack.position)
     )
     track_ids = [entry.track_id for entry in entries]
+    cover_url = versioned_image_url(
+        f"/api/playlists/{playlist.id}/cover",
+        Path(playlist.cover_path).stem if getattr(playlist, "cover_path", None) else None,
+    )
+    if not track_ids:
+        return {
+            "id": playlist.id,
+            "name": playlist.name,
+            "cover_url": cover_url,
+            "tracks": [],
+        }
     hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
     tracks = db.scalars(
         select(Track).where(
@@ -1239,10 +1264,7 @@ def get_playlist(
     return {
         "id": playlist.id,
         "name": playlist.name,
-        "cover_url": versioned_image_url(
-            f"/api/playlists/{playlist.id}/cover",
-            Path(playlist.cover_path).stem if getattr(playlist, "cover_path", None) else None,
-        ),
+        "cover_url": cover_url,
         "tracks": [track_to_dict(tracks_by_id[track_id]) for track_id in track_ids if track_id in tracks_by_id],
     }
 
