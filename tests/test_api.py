@@ -496,6 +496,68 @@ def test_legacy_playlist_cover_is_migrated_on_first_access():
         assert playlist.cover_path.endswith(".webp")
 
 
+def test_backup_and_restore_require_owner():
+    login()
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Guest Backup Test"})
+    code = invitation.json()["code"]
+    client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "guest_backup",
+            "display_name": "Guest",
+            "password": "GuestPassword123!",
+        },
+    )
+    guest_client = TestClient(app)
+    guest_client.post(
+        "/api/auth/login",
+        json={"username": "guest_backup", "password": "GuestPassword123!"},
+    )
+    backup_response = guest_client.get("/api/backup")
+    assert backup_response.status_code == 403
+    assert backup_response.json()["detail"] == "Owner access required"
+
+    restore_response = guest_client.post(
+        "/api/restore",
+        files={"file": ("backup.zip", b"PK\x05\x06" + b"\x00" * 18, "application/zip")},
+    )
+    assert restore_response.status_code == 403
+    assert restore_response.json()["detail"] == "Owner access required"
+
+
+def test_search_escapes_sql_wildcards():
+    login()
+    from apps.api.app import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        db.add(Track(
+            user_id=owner.id,
+            title="Special 100% Real",
+            artist="Wildcard Artist",
+            sha256="wildcard-test-1",
+            file_name="wildcard-test-1.mp3",
+            stored_path="wildcard-test-1.mp3",
+            mime_type="audio/mpeg",
+        ))
+        db.add(Track(
+            user_id=owner.id,
+            title="Special 1000 Real",
+            artist="Wildcard Artist",
+            sha256="wildcard-test-2",
+            file_name="wildcard-test-2.mp3",
+            stored_path="wildcard-test-2.mp3",
+            mime_type="audio/mpeg",
+        ))
+        db.commit()
+
+    percent_search = client.get("/api/search?q=100%")
+    assert percent_search.status_code == 200
+    titles = [t["title"] for t in percent_search.json()]
+    assert "Special 100% Real" in titles
+    assert "Special 1000 Real" not in titles
+
+
 def login_rate_limiter_reset():
     from apps.api.core.security import login_rate_limiter
     login_rate_limiter.attempts.clear()

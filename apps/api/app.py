@@ -191,11 +191,16 @@ def ensure_optional_columns():
         "tracks": (("cover_path", "VARCHAR"), ("isrc", "VARCHAR")),
         "playlists": (("cover_path", "VARCHAR"),),
     }
+    identifier_pattern = re.compile(r"^[a-zA-Z0-9_]+$")
     inspector = inspect(engine)
     with engine.begin() as connection:
         for table_name, table_columns in columns.items():
+            if not identifier_pattern.fullmatch(table_name):
+                raise ValueError(f"Invalid table name: {table_name}")
             existing = {column["name"] for column in inspector.get_columns(table_name)}
             for column_name, column_type in table_columns:
+                if not identifier_pattern.fullmatch(column_name) or not identifier_pattern.fullmatch(column_type):
+                    raise ValueError(f"Invalid column identifier: {column_name} {column_type}")
                 if column_name not in existing:
                     connection.execute(
                         text(
@@ -1003,6 +1008,10 @@ async def track_cover(
     return await image_response(track.cover_path, "Cover not found", save_path)
 
 
+def escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @app.get("/api/search")
 def search_tracks(
     q: str,
@@ -1012,15 +1021,16 @@ def search_tracks(
     query = q.strip()[:200]
     if not query:
         return []
-    pattern = f"%{query.lower()}%"
+    escaped = escape_like(query.lower())
+    pattern = f"%{escaped}%"
     hidden_ids = db.scalars(
         select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
     ).all()
     statement = select(Track).where(
-        (Track.title.ilike(pattern))
-        | (Track.artist.ilike(pattern))
-        | (Track.album.ilike(pattern))
-        | (Track.genre.ilike(pattern))
+        (Track.title.ilike(pattern, escape="\\"))
+        | (Track.artist.ilike(pattern, escape="\\"))
+        | (Track.album.ilike(pattern, escape="\\"))
+        | (Track.genre.ilike(pattern, escape="\\"))
     )
     if hidden_ids:
         statement = statement.where(Track.id.not_in(hidden_ids))
@@ -1459,6 +1469,7 @@ def remove_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], 
 
 @app.get("/api/backup")
 def create_backup(user: Annotated[User, Depends(current_user)]):
+    require_owner(user)
     if storage_provider_name != "local":
         raise HTTPException(status_code=400, detail="Backup is currently available only for local storage")
     backup_path = BASE_DIR / f"auralith-backup-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
@@ -1480,6 +1491,7 @@ async def restore_backup(
     file: UploadFile,
     user: Annotated[User, Depends(current_user)],
 ):
+    require_owner(user)
     if storage_provider_name != "local":
         raise HTTPException(status_code=400, detail="Restore is currently available only for local storage")
     if not DATABASE_URL.startswith("sqlite"):
