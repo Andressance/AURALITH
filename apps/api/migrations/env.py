@@ -31,7 +31,19 @@ def database_url() -> str:
         data_dir = Path(os.getenv("AURALITH_DATA_DIR", "./data")).resolve()
         data_dir.mkdir(parents=True, exist_ok=True)
         url = f"sqlite:///{data_dir / 'auralith.db'}"
-    return SQLAlchemyDatabaseProvider.normalize_url(url)
+    url = SQLAlchemyDatabaseProvider.normalize_url(url)
+    ensure_sqlite_directory(url)
+    return url
+
+
+def ensure_sqlite_directory(url: str) -> None:
+    """SQLite cannot create missing directories, and a fresh volume has none."""
+    if not url.startswith("sqlite") or ":///" not in url:
+        return
+    target = Path(url.split(":///", 1)[1])
+    if not target.is_absolute():
+        target = Path.cwd() / target
+    target.parent.mkdir(parents=True, exist_ok=True)
 
 
 def configure(connection=None) -> None:
