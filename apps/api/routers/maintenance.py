@@ -16,13 +16,8 @@ from starlette.background import BackgroundTask
 
 from apps.api.deps import current_user, db_session, require_owner
 from apps.api.models import User
-from apps.api.runtime import (
-    BASE_DIR,
-    STORAGE_DIR,
-    database,
-    engine,
-    storage_provider_name,
-)
+from apps.api.infrastructure.storage.factory import local_storage_root
+from apps.api.runtime import BASE_DIR, database, engine, storage
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +27,10 @@ router = APIRouter()
 def create_backup(user: Annotated[User, Depends(current_user)]):
     require_owner(user)
     sqlite_path = database.sqlite_path
+    storage_root = local_storage_root(storage)
     # A ZIP without the database is not a backup, so refuse instead of returning a
     # partial archive that would look like one.
-    if storage_provider_name != "local" or sqlite_path is None:
+    if storage_root is None or sqlite_path is None:
         raise HTTPException(
             status_code=400,
             detail="Backup requires local storage and a SQLite database",
@@ -54,10 +50,10 @@ def create_backup(user: Annotated[User, Depends(current_user)]):
             source.close()
         with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(snapshot_path, "auralith.db")
-            for path in STORAGE_DIR.rglob("*"):
+            for path in storage_root.rglob("*"):
                 if path.is_file():
                     # POSIX member names keep Windows-made archives restorable.
-                    relative = path.relative_to(STORAGE_DIR).as_posix()
+                    relative = path.relative_to(storage_root).as_posix()
                     archive.write(path, f"music/{relative}")
     finally:
         snapshot_path.unlink(missing_ok=True)
@@ -77,7 +73,8 @@ async def restore_backup(
 ):
     require_owner(user)
     sqlite_path = database.sqlite_path
-    if storage_provider_name != "local" or sqlite_path is None:
+    storage_root = local_storage_root(storage)
+    if storage_root is None or sqlite_path is None:
         raise HTTPException(
             status_code=400,
             detail="Restore requires local storage and a SQLite database",
@@ -107,13 +104,13 @@ async def restore_backup(
             engine.dispose()
             with archive.open("auralith.db") as source, sqlite_path.open("wb") as target:
                 shutil.copyfileobj(source, target)
-            shutil.rmtree(STORAGE_DIR)
-            STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(storage_root)
+            storage_root.mkdir(parents=True, exist_ok=True)
             for member in archive.namelist():
                 if not member.startswith("music/") or member.endswith("/"):
                     continue
                 relative = Path(member).relative_to("music")
-                destination = STORAGE_DIR / relative
+                destination = storage_root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, destination.open("wb") as target:
                     shutil.copyfileobj(source, target)

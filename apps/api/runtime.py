@@ -7,10 +7,7 @@ from pathlib import Path
 
 from apps.api.core.security import build_allowed_origins
 from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
-from apps.api.infrastructure.storage.gdrive import GoogleDriveStorageProvider
-from apps.api.infrastructure.storage.local import LocalStorageProvider
-from apps.api.infrastructure.storage.s3 import S3StorageProvider
-from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
+from apps.api.infrastructure.storage.factory import build_storage_provider
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +19,7 @@ DATABASE_URL = os.getenv("AURALITH_DB_URL", f"sqlite:///{BASE_DIR / 'auralith.db
 database = SQLAlchemyDatabaseProvider(DATABASE_URL)
 engine = database.engine
 SessionLocal = database.sessions
-storage_provider_name = os.getenv("AURALITH_STORAGE_PROVIDER", "local").lower()
-if storage_provider_name == "supabase":
-    storage = SupabaseStorageProvider(
-        bucket=os.getenv("SUPABASE_STORAGE_BUCKET", "music"),
-    )
-elif storage_provider_name == "local":
-    storage = LocalStorageProvider(STORAGE_DIR)
-elif storage_provider_name == "neon":
-    storage = S3StorageProvider()
-elif storage_provider_name == "gdrive":
-    storage = GoogleDriveStorageProvider()
-else:
-    raise RuntimeError(
-        "AURALITH_STORAGE_PROVIDER must be 'local', 'supabase', 'neon', or 'gdrive'"
-    )
+storage = build_storage_provider(STORAGE_DIR)
 
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
 ALLOW_VERCEL_ORIGINS = os.getenv("AURALITH_ALLOW_VERCEL_ORIGINS", "false").lower() == "true"

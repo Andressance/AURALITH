@@ -45,6 +45,7 @@ The backend is not coupled to Supabase or to a local installation:
 - Set `AURALITH_STORAGE_PROVIDER=local` for filesystem storage.
 - Set `AURALITH_STORAGE_PROVIDER=supabase` and provide `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SUPABASE_STORAGE_BUCKET` for Supabase Storage. `SUPABASE_SERVICE_ROLE_KEY` remains accepted only as deprecated compatibility.
 - Set `AURALITH_STORAGE_PROVIDER=gdrive` with `AURALITH_GDRIVE_CLIENT_ID`, `AURALITH_GDRIVE_CLIENT_SECRET`, `AURALITH_GDRIVE_REFRESH_TOKEN`, and `AURALITH_GDRIVE_FOLDER_ID` to keep audio and artwork in a folder of your own Google Drive. Playback streams with HTTP Range, so seeking works without copying files to the server. The ZIP backup only covers SQLite plus local storage.
+- Set `AURALITH_STORAGE_PROVIDERS` to a JSON list such as `[{"type":"gdrive"},{"type":"neon"}]` to run several backends at once: writes are mirrored to every provider, reads fall back to the next one when a backend is down or missing the object, and `AURALITH_STORAGE_MIRROR=false` writes only to the first backend that accepts. This replicates the media, not the database.
 - Supabase PostgreSQL uses a regular PostgreSQL `AURALITH_DB_URL`; an optional adapter can later enable Supabase-specific features without changing the API modules.
 
 ### MVP scope
@@ -738,6 +739,27 @@ Puesta en marcha:
 5. Define `AURALITH_GDRIVE_CLIENT_ID`, `AURALITH_GDRIVE_CLIENT_SECRET`, `AURALITH_GDRIVE_REFRESH_TOKEN` y `AURALITH_GDRIVE_FOLDER_ID`.
 
 Límites a tener en cuenta: se usa OAuth de usuario (una cuenta de servicio no tiene cuota propia y no puede subir a un Drive personal), el almacenamiento cuenta contra tu cuota de Drive, el refresh token puede revocarse desde tu cuenta y cada operación resuelve el nombre del archivo a un ID, que se cachea en memoria. La copia de seguridad ZIP sigue limitada a SQLite con almacenamiento local.
+
+## Varios proveedores a la vez
+
+`AURALITH_STORAGE_PROVIDERS` acepta una lista JSON y sustituye a `AURALITH_STORAGE_PROVIDER`:
+
+```bash
+AURALITH_STORAGE_PROVIDERS='[
+  {"type": "gdrive", "refresh_token": "...", "folder_id": "..."},
+  {"type": "gdrive", "refresh_token": "...", "folder_id": "..."},
+  {"type": "neon"}
+]'
+```
+
+- Las subidas se escriben en **todos** los backends; si uno falla, la subida termina bien mientras quede uno sano.
+- Las lecturas prueban en orden y caen al siguiente cuando el primero está caído o no tiene el archivo; se recuerda cuál sirvió para no repetir la búsqueda.
+- Los borrados se aplican en todos.
+- `AURALITH_STORAGE_MIRROR=false` escribe solo en el primero que acepte y usa el resto como respaldo de lectura.
+
+Cada entrada solo necesita `type`; los campos que omitas se leen de las variables propias del proveedor (`AURALITH_GDRIVE_*`, `SUPABASE_*`, `NEON_*`). Coste: cada archivo ocupa espacio en todos los backends y subir tarda más.
+
+Esto cubre el almacenamiento, no la base de datos: si tu PostgreSQL gratuito cae, las canciones seguirán en Drive pero la biblioteca (títulos, playlists, usuarios) no está replicada. Para SQLite con almacenamiento local existe la copia ZIP.
 
 La aplicación deberá poder cambiar de proveedor sin modificar los módulos de biblioteca o reproducción.
 
