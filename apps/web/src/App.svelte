@@ -1,5 +1,21 @@
 <script>
   import { tick } from "svelte";
+  import { API_BASE, assetUrl, text } from "./lib/format.js";
+  import DevicesPanel from "./components/DevicesPanel.svelte";
+  import JamPage from "./components/JamPage.svelte";
+  import LoginView from "./components/LoginView.svelte";
+  import PlayerBar from "./components/PlayerBar.svelte";
+  import PlaylistPicker from "./components/PlaylistPicker.svelte";
+  import PlaylistsPage from "./components/PlaylistsPage.svelte";
+  import PlaylistView from "./components/PlaylistView.svelte";
+  import ProfilePage from "./components/ProfilePage.svelte";
+  import QueuePanel from "./components/QueuePanel.svelte";
+  import SelectionBar from "./components/SelectionBar.svelte";
+  import SharePanel from "./components/SharePanel.svelte";
+  import Sidebar from "./components/Sidebar.svelte";
+  import TrackGrid from "./components/TrackGrid.svelte";
+  import UploadPanel from "./components/UploadPanel.svelte";
+  import UploadPlaylistPicker from "./components/UploadPlaylistPicker.svelte";
 
   let authenticated = false;
   let username = "owner";
@@ -85,7 +101,6 @@
   let inviteUsername = "";
   let invitePassword = "";
   let inviteDisplayName = "";
-  const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   function viewFromPath() {
     const path = window.location.pathname;
@@ -136,30 +151,11 @@
     togglePlayback();
   });
 
-  function text(value, fallback = "") {
-    return typeof value === "string" ? value : fallback;
-  }
-
   function streamUrl(track) {
     // Media URLs are signed by the API and the session token is no longer accepted
     // in the query string, so there is no unauthenticated URL to build here.
     if (!track?.stream_url) return undefined;
     return `${API_BASE}${track.stream_url}`;
-  }
-
-  function assetUrl(path) {
-    if (!path) return "";
-    if (path.startsWith("http")) return path;
-    return `${API_BASE}${path}`;
-  }
-
-  function titleInitial(title) {
-    const value = text(title).trim();
-    return value ? value.slice(0, 1).toUpperCase() : "♫";
-  }
-
-  function hideBrokenImage(event) {
-    event.currentTarget.style.display = "none";
   }
 
   async function api(path, options = {}) {
@@ -867,14 +863,6 @@
     }
   }
 
-  function jamLibrary(query, library) {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return library;
-    return library.filter((track) =>
-      [track.title, track.artist, track.album].some((value) => String(value || "").toLowerCase().includes(needle))
-    );
-  }
-
   async function jamRemoveQueueItem(item) {
     if (!jamCode) return;
     try {
@@ -1103,12 +1091,6 @@
     } catch {}
   }
 
-  function formatTime(seconds) {
-    if (!Number.isFinite(seconds)) return "0:00";
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
-  }
-
   function pullTouchStart(event) {
     if (event.touches.length !== 1) return;
     const panel = event.currentTarget;
@@ -1314,6 +1296,23 @@
     sendRelay(device.device_id, { cmd: "handoff" });
   }
 
+  // State changes that child components ask for through callbacks.
+  function goHome() {
+    navigateView("library");
+    visibleTracks = tracks;
+  }
+
+  function goSearch() {
+    navigateView("library");
+    searchQuery = "";
+    search();
+  }
+
+  function closeUploadPlaylistPicker() {
+    showUploadPlaylistPicker = false;
+    pendingUploadFiles = [];
+  }
+
   setupMediaSession();
   setInterval(publishPresence, 5000);
 
@@ -1321,129 +1320,40 @@
 </script>
 
 {#if !authenticated}
-  {#if inviteCode}
-    <main class="login-shell">
-      <form onsubmit={activateInvite}>
-        <div class="login-brand">
-          <img src="/auralith-logo.svg" alt="Auralith" />
-          <img class="login-wave" src="/auralith-wave.svg" alt="" aria-hidden="true" />
-        </div>
-        <h1>Crea tu cuenta</h1>
-        <p>Te han invitado a una biblioteca privada.</p>
-        <label>
-          Nombre visible
-          <input bind:value={inviteDisplayName} maxlength="100" autocomplete="name" />
-        </label>
-        <label>
-          Usuario
-          <input bind:value={inviteUsername} maxlength="63" autocomplete="username" />
-        </label>
-        <label>
-          Contraseña
-          <input type="password" bind:value={invitePassword} autocomplete="new-password" />
-        </label>
-        {#if error}<p class="error">{error}</p>{/if}
-        <button type="submit">Crear cuenta</button>
-      </form>
-    </main>
-  {:else}
-    <main class="login-shell">
-      <form onsubmit={(event) => login(event)}>
-        <div class="login-brand">
-          <img src="/auralith-logo.svg" alt="Auralith" />
-          <img class="login-wave" src="/auralith-wave.svg" alt="" aria-hidden="true" />
-        </div>
-        <h1>Bienvenido de nuevo</h1>
-        <p>Tu música. Tu servidor. Tus reglas.</p>
-        <label>
-          Usuario
-          <input bind:value={username} autocomplete="username" />
-        </label>
-        <label>
-          Contraseña
-          <input type="password" bind:value={password} autocomplete="current-password" />
-        </label>
-        {#if error}<p class="error">{error}</p>{/if}
-        <button type="submit">Entrar</button>
-      </form>
-    </main>
-  {/if}
+  <LoginView
+    {inviteCode}
+    bind:username
+    bind:password
+    bind:inviteUsername
+    bind:invitePassword
+    bind:inviteDisplayName
+    {error}
+    onActivateInvite={activateInvite}
+    onLogin={login}
+  />
 {:else}
   <div class="app-shell" class:player-visible={playerVisible}>
-    <aside class="sidebar">
-      <a class="brand" href="/" aria-label="Auralith">
-        <img src="/icon.svg" alt="" />
-        <h1>Auralith</h1>
-      </a>
-      <nav>
-        <button class="nav-item" class:active={activeView === "library"} onclick={() => { navigateView("library"); visibleTracks = tracks; }}>⌂ <span>Inicio</span></button>
-        <button class="nav-item" onclick={() => { navigateView("library"); searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
-        <button class="nav-item" class:active={activeView === "playlists"} onclick={() => navigateView("playlists")}>♫ <span>Playlists</span></button>
-        <button class="nav-item" class:active={activeView === "profile"} onclick={() => navigateView("profile")}>● <span>Perfil</span></button>
-        <button class="nav-item" class:active={activeView === "jam"} onclick={() => navigateView("jam")}>◉ <span>Jam</span></button>
-        <button class="nav-item" class:active={showDevicesPanel} onclick={() => showDevicesPanel = !showDevicesPanel}>◫ <span>Dispositivos</span></button>
-      </nav>
-      <div class="sidebar-library">
-        <div class="sidebar-heading">
-          <h2>Tu biblioteca</h2>
-          <label class="icon-upload" title="Subir música">＋<input type="file" multiple accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} /></label>
-        </div>
-        <div class="playlist-create">
-          <input bind:value={playlistName} placeholder="Nueva playlist" />
-          <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
-        </div>
-        {#each playlists.filter((playlist) => !playlist.shared || playlist.saved) as playlist}
-          <div
-            class="playlist-item"
-            class:selected={selectedPlaylistId === playlist.id}
-            class:drop-target={dragOverPlaylistId === playlist.id}
-            role="group"
-            aria-label={`Playlist ${playlist.name}`}
-            ondragover={(event) => dragTrackOver(event, playlist.id)}
-            ondragleave={leavePlaylistDrop}
-            ondrop={(event) => dropTracksOnPlaylist(event, playlist.id)}
-          >
-            <button class="playlist-open" onclick={() => selectPlaylist(playlist)}>
-              {#if playlist.cover_url}
-                <img class="playlist-cover" src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
-              {:else}
-                <span class="playlist-cover">♫</span>
-              {/if}
-              <span><strong>{playlist.name}</strong><small>{playlist.shared ? `De ${playlist.owner}` : "Playlist"}</small></span>
-            </button>
-            <button
-              class="playlist-play"
-              onclick={(event) => { event.stopPropagation(); playPlaylist(playlist); }}
-              aria-label={`Reproducir playlist ${playlist.name}`}
-              title={`Reproducir ${playlist.name}`}
-            >
-              ▶
-            </button>
-          </div>
-        {/each}
-      </div>
-      <div class="sidebar-footer">
-        <button class="profile-button" onclick={() => navigateView("profile")}>
-          {#if profile?.avatar_url}
-            <img src={assetUrl(profile.avatar_url)} alt="" fetchpriority="high" decoding="async" />
-          {:else}
-            <span>{profileName.slice(0, 1).toUpperCase()}</span>
-          {/if}
-          <strong>{profileName}</strong>
-        </button>
-      </div>
-    </aside>
-    <button
-      class="mobile-profile-button"
-      aria-label={`Abrir perfil de ${profileName}`}
-      onclick={() => navigateView("profile")}
-    >
-      {#if profile?.avatar_url}
-        <img src={assetUrl(profile.avatar_url)} alt="" />
-      {:else}
-        <span>{profileName.slice(0, 1).toUpperCase()}</span>
-      {/if}
-    </button>
+    <Sidebar
+      {activeView}
+      {showDevicesPanel}
+      {playlists}
+      {selectedPlaylistId}
+      {dragOverPlaylistId}
+      bind:playlistName
+      {profile}
+      {profileName}
+      onNavigate={navigateView}
+      onHome={goHome}
+      onSearch={goSearch}
+      onToggleDevices={() => showDevicesPanel = !showDevicesPanel}
+      onUpload={upload}
+      onCreatePlaylist={createPlaylist}
+      onSelectPlaylist={selectPlaylist}
+      onPlayPlaylist={playPlaylist}
+      onDragOver={dragTrackOver}
+      onDragLeave={leavePlaylistDrop}
+      onDrop={dropTracksOnPlaylist}
+    />
 
     <main
       class="main-panel"
@@ -1462,334 +1372,65 @@
       {/if}
       {#if error}<p class="error">{error}</p>{/if}
       {#if activeView === "jam"}
-        <section class="jam-page">
-          <header class="jam-header">
-            <div><span>Escuchar juntos</span><h2>Jam</h2></div>
-            {#if jamCode}
-              <button class="jam-leave" onclick={leaveJam}>Salir</button>
-            {/if}
-          </header>
-
-          {#if jamError}<p class="error">{jamError}</p>{/if}
-
-          {#if !jamCode}
-            <div class="jam-start">
-              <article class="jam-card">
-                <strong>Crea un jam</strong>
-                <p>Comparte el código y escuchad lo mismo a la vez. Cualquiera puede cambiar de canción.</p>
-                <button class="primary-upload" onclick={createJam}>Crear jam</button>
-              </article>
-              <article class="jam-card">
-                <strong>Entrar en un jam</strong>
-                <p>Pide el código a quien lo haya creado.</p>
-                <form onsubmit={(event) => { event.preventDefault(); joinJam(); }}>
-                  <input bind:value={jamJoinCode} placeholder="Código" maxlength="12" />
-                  <button type="submit">Entrar</button>
-                </form>
-              </article>
-            </div>
-          {:else}
-            <div class="jam-code">
-              <span>Código del jam</span>
-              <strong>{jamCode}</strong>
-              <button onclick={() => navigator.clipboard?.writeText(jamCode)}>Copiar</button>
-            </div>
-
-            <div class="jam-now">
-              <div class="jam-cover">
-                {#if jamState?.current_track?.cover_url}
-                  <img src={assetUrl(jamState.current_track.cover_url)} alt="" />
-                {:else}
-                  ♫
-                {/if}
-              </div>
-              <div class="jam-now-text">
-                <span>{jamState?.is_playing ? "Sonando ahora" : jamState?.current_track ? "En pausa" : "Nada sonando"}</span>
-                <strong>{jamState?.current_track ? text(jamState.current_track.title, "Canción sin título") : "Elige una canción"}</strong>
-                <small>{jamState?.current_track ? text(jamState.current_track.artist, "Artista desconocido") : "Pulsa ▶ en la biblioteca de abajo para empezar a sonar todos a la vez"}</small>
-              </div>
-              <div class="jam-controls">
-                <button onclick={() => jamControl(jamState?.is_playing ? "pause" : "play", { position: audio?.currentTime || 0 })} disabled={!jamState?.current_track}>
-                  {jamState?.is_playing ? "Ⅱ Pausar" : "▶ Reproducir"}
-                </button>
-                <button onclick={() => jamControl("next")} disabled={!jamState?.queue?.length}>⏭ Siguiente</button>
-              </div>
-            </div>
-
-            <div class="jam-people">
-              {#each jamState?.participants || [] as person}
-                <span class="jam-person">{person.display_name || person.username}{person.id === jamState.host_user_id ? " · anfitrión" : ""}</span>
-              {/each}
-            </div>
-
-            <div class="jam-columns">
-              <section class="jam-panel">
-                <h3>A continuación <small>{jamState?.queue?.length || 0}</small></h3>
-                <p class="jam-hint">La primera de la lista es la siguiente. Ordénalas con ↑ ↓.</p>
-                {#each jamState?.queue || [] as item, index (item.id)}
-                  <div class="jam-row">
-                    <span>{text(item.track.title, "Canción sin título")}<small>{text(item.track.artist, "Artista desconocido")}</small></span>
-                    <div class="jam-row-actions">
-                      <button onclick={() => jamMoveQueueItem(item, "up")} disabled={index === 0} aria-label="Subir">↑</button>
-                      <button onclick={() => jamMoveQueueItem(item, "down")} disabled={index === jamState.queue.length - 1} aria-label="Bajar">↓</button>
-                      <button onclick={() => jamRemoveQueueItem(item)} aria-label="Quitar de la cola">Quitar</button>
-                    </div>
-                  </div>
-                {:else}
-                  <p class="jam-empty">Nada en cola. Cuando termine la canción, el jam pasará a la siguiente de aquí.</p>
-                {/each}
-              </section>
-              <section class="jam-panel">
-                <h3>Biblioteca</h3>
-                <input class="jam-search" type="search" bind:value={jamSearch} placeholder="Buscar canción o artista" aria-label="Buscar en tu biblioteca" />
-                {#each jamLibrary(jamSearch, tracks) as track (track.id)}
-                  <div class="jam-row">
-                    <span>{text(track.title, "Canción sin título")}<small>{text(track.artist, "Artista desconocido")}</small></span>
-                    <div class="jam-row-actions">
-                      <button onclick={() => playTrack(track)} aria-label={`Reproducir ${text(track.title, "canción")} ahora`}>▶ Ahora</button>
-                      <button onclick={() => enqueueTrack(track, true)} aria-label={`Poner ${text(track.title, "canción")} la siguiente`}>⏭ Siguiente</button>
-                      <button onclick={() => enqueueTrack(track)} aria-label={`Añadir ${text(track.title, "canción")} al final`}>+ Cola</button>
-                    </div>
-                  </div>
-                {:else}
-                  <p class="jam-empty">{tracks.length ? "Ninguna canción coincide con la búsqueda." : "Sube música para añadirla."}</p>
-                {/each}
-              </section>
-            </div>
-
-            {#if profile && jamState?.host_user_id === profile.id}
-              <button class="jam-end" onclick={endJam}>Terminar el jam</button>
-            {/if}
-          {/if}
-        </section>
+        <JamPage
+          {jamCode}
+          {jamState}
+          {jamError}
+          bind:jamJoinCode
+          bind:jamSearch
+          {tracks}
+          {profile}
+          onCreate={createJam}
+          onJoin={joinJam}
+          onLeave={leaveJam}
+          onEnd={endJam}
+          onTogglePlayback={togglePlayback}
+          onControl={jamControl}
+          onMoveQueueItem={jamMoveQueueItem}
+          onRemoveQueueItem={jamRemoveQueueItem}
+          onPlayTrack={playTrack}
+          onEnqueue={enqueueTrack}
+        />
       {/if}
       {#if activeView === "profile"}
-        <section class="profile-page">
-          <button class="page-back" onclick={() => navigateView("library")}><span>←</span> Volver a la biblioteca</button>
-          <div class="profile-hero">
-            <div class="profile-avatar-large">
-              {#if profile?.avatar_url}
-                <img src={assetUrl(profile.avatar_url)} alt="" />
-              {:else}
-                <span>{profileName.slice(0, 1).toUpperCase()}</span>
-              {/if}
-              <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadProfileAvatar} /></label>
-            </div>
-            <div class="profile-heading">
-              <span>Perfil</span>
-              <h2>{profileName}</h2>
-              <p>@{profileUsername} · {profile?.role === "owner" ? "Propietario" : "Invitado"}</p>
-            </div>
-          </div>
-          <form class="profile-form" onsubmit={saveProfile}>
-            <section class="profile-form-section">
-              <div>
-                <span>Detalles públicos</span>
-                <p>Cómo quieres que aparezca tu nombre dentro de Auralith.</p>
-              </div>
-              <label>
-                <span>Nombre visible</span>
-                <input bind:value={profileName} maxlength="100" placeholder="Tu nombre" />
-              </label>
-            </section>
-            <section class="profile-form-section">
-              <div>
-                <span>Cuenta</span>
-                <p>Usuario que utilizas para iniciar sesión.</p>
-              </div>
-              <label>
-                <span>Usuario</span>
-                <input bind:value={profileUsername} maxlength="63" autocomplete="username" />
-              </label>
-            </section>
-            <div class="profile-actions">
-              <button type="button" class="profile-cancel" onclick={() => navigateView("library")}>Cancelar</button>
-              <button type="submit" class="profile-save">Guardar cambios</button>
-            </div>
-          </form>
-          <section class="profile-account-actions">
-            <div>
-              <span>Cuenta y datos</span>
-              <p>Gestiona tu sesión y las copias locales de la biblioteca.</p>
-            </div>
-            <div class="profile-action-grid">
-              {#if profile?.role === "owner"}
-                <button type="button" onclick={downloadBackup}>
-                  <span>↧</span>
-                  <strong>Copia de seguridad</strong>
-                </button>
-                <label>
-                  <span>↥</span>
-                  <strong>Restaurar</strong>
-                  <input type="file" accept=".zip" onchange={restoreBackup} />
-                </label>
-              {/if}
-              <button type="button" class="danger" onclick={logout}>
-                <span>⏻</span>
-                <strong>Cerrar sesión</strong>
-              </button>
-            </div>
-          </section>
-          {#if profile?.role === "owner"}
-            <section class="user-management">
-              <div class="user-management-heading">
-                <div>
-                  <span>Administración</span>
-                  <h2>Usuarios</h2>
-                  <p>Crea invitaciones y gestiona las cuentas de esta instancia.</p>
-                </div>
-              </div>
-              <form class="invitation-form" onsubmit={createInvitation}>
-                <input bind:value={invitationName} maxlength="100" placeholder="Nombre del invitado (opcional)" />
-                <button type="submit">Crear invitación</button>
-              </form>
-              {#if invitationCode}
-                <div class="invitation-link">
-                  <div>
-                    <span>Enlace nuevo</span>
-                    <strong>{window.location.origin}/invite/{invitationCode}</strong>
-                  </div>
-                  <button onclick={copyInvitation}>Copiar</button>
-                </div>
-              {/if}
-              <div class="user-list">
-                {#each ownerUsers as account}
-                  <article>
-                    <div class="user-avatar">{account.display_name.slice(0, 1).toUpperCase()}</div>
-                    <div class="user-details">
-                      <strong>{account.display_name}</strong>
-                      <span>@{account.username} · {account.role === "owner" ? "Propietario" : "Invitado"}</span>
-                    </div>
-                    {#if account.role !== "owner"}
-                      <button class="danger" onclick={() => deleteGuest(account)} title="Eliminar cuenta">×</button>
-                    {/if}
-                  </article>
-                {/each}
-              </div>
-              {#if ownerInvitations.length}
-                <div class="pending-invitations">
-                  <strong>Invitaciones pendientes</strong>
-                  {#each ownerInvitations as invitation}
-                    {#if !invitation.used}
-                      <article>
-                        <div>
-                          <strong>{invitation.display_name || "Invitado"}</strong>
-                          <span>Caduca {new Date(invitation.expires_at).toLocaleDateString()}</span>
-                        </div>
-                        <button onclick={() => revokeInvitation(invitation.id)} title="Revocar invitación">Revocar</button>
-                      </article>
-                    {/if}
-                  {/each}
-                </div>
-              {/if}
-            </section>
-          {/if}
-        </section>
+        <ProfilePage
+          {profile}
+          bind:profileName
+          bind:profileUsername
+          bind:invitationName
+          {invitationCode}
+          {ownerUsers}
+          {ownerInvitations}
+          onNavigate={navigateView}
+          onSave={saveProfile}
+          onUploadAvatar={uploadProfileAvatar}
+          onDownloadBackup={downloadBackup}
+          onRestoreBackup={restoreBackup}
+          onLogout={logout}
+          onCreateInvitation={createInvitation}
+          onCopyInvitation={copyInvitation}
+          onRevokeInvitation={revokeInvitation}
+          onDeleteGuest={deleteGuest}
+        />
       {:else if activeView === "playlists"}
-        <section class="playlist-page">
-          <div class="page-heading">
-            <div>
-              <span>Tu biblioteca</span>
-              <h2>Playlists</h2>
-            </div>
-            <button class="primary-upload" onclick={() => playlistName = ""}>Nueva playlist</button>
-          </div>
-          <div class="playlist-create-page">
-            <input bind:value={playlistName} placeholder="Nombre de la playlist" maxlength="200" />
-            <button onclick={createPlaylist}>Crear</button>
-          </div>
-          <form class="csv-import-form" onsubmit={importPlaylistCsv}>
-            <div>
-              <strong>Importar desde CSV</strong>
-              <span>Se añadirán automáticamente solo coincidencias exactas.</span>
-            </div>
-            <input bind:value={csvPlaylistName} maxlength="200" placeholder="Nombre de la playlist (opcional)" />
-            <input type="file" accept=".csv,text/csv" required />
-            <button type="submit" disabled={csvImporting}>
-              {csvImporting ? "Importando…" : "Importar CSV"}
-            </button>
-          </form>
-          {#if csvImportReport}
-            <section class="csv-import-report" aria-live="polite">
-              <div>
-                <strong>{csvImportReport.playlist_name}</strong>
-                <span>{csvImportReport.added} coincidencias exactas añadidas</span>
-              </div>
-              <button onclick={() => csvImportReport = null} aria-label="Cerrar informe">×</button>
-              {#each csvImportReport.results as result}
-                <article>
-                  <div>
-                    <strong>{result.title}</strong>
-                    <span>{result.artist || "Artista desconocido"} · {result.status.replaceAll("_", " ")}</span>
-                    {#if result.candidate}
-                      <small>Sugerencia: {result.candidate.title} — {result.candidate.artist || "Artista desconocido"}</small>
-                    {/if}
-                  </div>
-                  {#if result.candidate && !result.confirmed && result.status !== "EXACT"}
-                    <button onclick={() => confirmImportCandidate(result)}>Añadir</button>
-                  {:else if result.confirmed}
-                    <span class="csv-import-confirmed">Añadida</span>
-                  {/if}
-                </article>
-              {/each}
-            </section>
-          {/if}
-          <div class="playlist-grid">
-            {#each playlists as playlist}
-              <article class="playlist-card">
-                <button class="playlist-card-open" onclick={() => { navigateView("library"); selectPlaylist(playlist); }}>
-                {#if playlist.cover_url}
-                  <img src={assetUrl(playlist.cover_url)} alt="" />
-                {:else}
-                  <span>♫</span>
-                {/if}
-                <strong>{playlist.name}</strong>
-                <small>{playlist.shared ? `De ${playlist.owner}${playlist.role === "editor" ? " · colaboras" : ""}` : "Playlist"}</small>
-                </button>
-                {#if playlist.shared}
-                  <button class="playlist-library" class:saved={playlist.saved} onclick={() => togglePlaylistLibrary(playlist)}>
-                    {playlist.saved ? "✓ En tu biblioteca" : "＋ Añadir a mi biblioteca"}
-                  </button>
-                {/if}
-                <button
-                  class="playlist-card-play"
-                  onclick={() => playPlaylist(playlist)}
-                  aria-label={`Reproducir playlist ${playlist.name}`}
-                  title={`Reproducir ${playlist.name}`}
-                >▶</button>
-              </article>
-            {/each}
-          </div>
-        </section>
+        <PlaylistsPage
+          {playlists}
+          bind:playlistName
+          bind:csvPlaylistName
+          {csvImporting}
+          {csvImportReport}
+          onCreatePlaylist={createPlaylist}
+          onImportCsv={importPlaylistCsv}
+          onCloseReport={() => csvImportReport = null}
+          onConfirmCandidate={confirmImportCandidate}
+          onNavigate={navigateView}
+          onSelectPlaylist={selectPlaylist}
+          onToggleLibrary={togglePlaylistLibrary}
+          onPlayPlaylist={playPlaylist}
+        />
       {/if}
       {#if uploadQueue.length}
-        <section class="upload-panel" aria-live="polite">
-          <div class="upload-summary">
-            <div>
-              <strong>{uploading ? "Subiendo canciones" : "Subida finalizada"}</strong>
-              <span>{uploadProgress}</span>
-            </div>
-            {#if !uploading}
-              <button onclick={() => uploadQueue = []} aria-label="Cerrar resumen">×</button>
-            {/if}
-          </div>
-          <div class="upload-progress-bar">
-            <span style={`width: ${(uploadQueue.filter((item) => item.status === "done" || item.status === "error").length / uploadQueue.length) * 100}%`}></span>
-          </div>
-          <div class="upload-list">
-            {#each uploadQueue as item}
-              <div class={`upload-item ${item.status}`}>
-                <span class="upload-status">
-                  {item.status === "done" ? "✓" : item.status === "error" ? "!" : item.status === "uploading" ? "↻" : "·"}
-                </span>
-                <div>
-                  <strong>{item.name}</strong>
-                  <small>{item.detail}</small>
-                </div>
-              </div>
-            {/each}
-          </div>
-        </section>
+        <UploadPanel {uploadQueue} {uploading} {uploadProgress} onClose={() => uploadQueue = []} />
       {/if}
       {#if activeView === "library"}
         <header class="topbar">
@@ -1801,125 +1442,59 @@
       {/if}
 
       {#if activeView === "library" && selectedPlaylist}
-        <section class="playlist-hero">
-          <div class="hero-cover">
-            {#if selectedPlaylist.cover_url}
-              <img src={assetUrl(selectedPlaylist.cover_url)} alt="" fetchpriority="low" loading="lazy" decoding="async" onerror={hideBrokenImage} />
-            {:else}
-              ♫
-            {/if}
-            {#if selectedPlaylist.role === "owner"}
-              <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadPlaylistCover} /></label>
-            {/if}
-          </div>
-          <div>
-            <span>{selectedPlaylist.role === "owner" ? "Playlist" : selectedPlaylist.role === "editor" ? "Colaboras en esta playlist" : "Compartida contigo"}</span>
-            <h2>{selectedPlaylist.name}</h2>
-            <p>{selectedPlaylist.shared ? `De ${selectedPlaylist.owner}` : "Auralith"} · {selectedPlaylist.tracks.length} canciones</p>
-            <div class="hero-actions">
-              {#if selectedPlaylist.role === "owner"}
-                <button class="share-playlist" onclick={openSharePanel}>Compartir</button>
-              {:else}
-                <button class="share-playlist" onclick={() => togglePlaylistLibrary(selectedPlaylist)}>
-                  {selectedPlaylist.saved ? "Quitar de mi biblioteca" : "Añadir a mi biblioteca"}
-                </button>
-              {/if}
-            </div>
-          </div>
-        </section>
-        <section class="track-list playlist-tracks">
-          {#each selectedPlaylist.tracks as track, index}
-            <article
-              class:playing={currentTrack?.id === track.id}
-              draggable="true"
-              ondragstart={(event) => startTrackDrag(event, track.id)}
-              ondragend={endTrackDrag}
-            >
-              <span class="track-index">{index + 1}</span>
-              <button class="track-play" onclick={() => playTrack(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
-              <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
-              <button class="row-action" onclick={() => enqueueTrack(track, true)} title="Reproducir después" aria-label="Reproducir después">⏭</button>
-              <button class="row-action" onclick={() => enqueueTrack(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
-              {#if selectedPlaylist.role !== "viewer"}
-                <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
-              {/if}
-            </article>
-          {/each}
-        </section>
+        <PlaylistView
+          {selectedPlaylist}
+          {currentTrack}
+          {isPlaying}
+          onUploadCover={uploadPlaylistCover}
+          onShare={openSharePanel}
+          onToggleLibrary={togglePlaylistLibrary}
+          onPlayTrack={playTrack}
+          onEnqueue={enqueueTrack}
+          onRemove={removeFromPlaylist}
+          onDragStart={startTrackDrag}
+          onDragEnd={endTrackDrag}
+        />
       {:else if activeView === "library"}
-        <section class="library-header">
-          <div><span>Tu música</span><h2>Made for you</h2></div>
-          <label class="primary-upload" class:disabled={uploading}>Subir canciones<input type="file" multiple accept=".mp3,.flac,audio/mpeg,audio/flac" onchange={upload} disabled={uploading} /></label>
-        </section>
-        <section class="track-grid">
-          {#each visibleTracks as track}
-            <article
-              class:playing={currentTrack?.id === track.id}
-              draggable="true"
-              ondragstart={(event) => startTrackDrag(event, track.id)}
-              ondragend={endTrackDrag}
-            >
-              <label class="track-select">
-                <input
-                  type="checkbox"
-                  checked={selectedTrackIds.includes(track.id)}
-                  onchange={() => toggleTrackSelection(track.id)}
-                  aria-label={`Seleccionar ${text(track.title, "Canción")}`}
-                />
-              </label>
-              <button class="cover" onclick={() => playTrack(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
-                {#if track.cover_url}
-                  <img src={assetUrl(track.cover_url)} alt="" loading="lazy" decoding="async" onerror={hideBrokenImage} />
-                {:else}
-                  <span>{titleInitial(track.title)}</span>
-                {/if}
-                <b>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</b>
-              </button>
-              <strong>{text(track.title, "Canción sin título")}</strong>
-              <span>{text(track.artist, "Artista desconocido")}</span>
-              <div class="track-actions">
-                <button onclick={() => enqueueTrack(track, true)} aria-label="Reproducir después" title="Reproducir después">⏭</button>
-                <button onclick={() => enqueueTrack(track)} aria-label="Añadir a la cola" title="Añadir a la cola">↗</button>
-                <button onclick={() => openTrackPlaylistPicker(track.id)} aria-label="Añadir a playlist" title="Añadir a playlist">＋</button>
-                <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
-                <button onclick={() => deleteTrack(track)} aria-label="Eliminar" title="Eliminar">×</button>
-              </div>
-            </article>
-          {/each}
-        </section>
+        <TrackGrid
+          {visibleTracks}
+          {currentTrack}
+          {isPlaying}
+          {selectedTrackIds}
+          {uploading}
+          onUpload={upload}
+          onPlayTrack={playTrack}
+          onEnqueue={enqueueTrack}
+          onOpenPlaylistPicker={openTrackPlaylistPicker}
+          onFavorite={favorite}
+          onDelete={deleteTrack}
+          onToggleSelection={toggleTrackSelection}
+          onDragStart={startTrackDrag}
+          onDragEnd={endTrackDrag}
+        />
       {/if}
     </main>
 
     {#if currentTrack && playerVisible}
-      <footer class="player">
-        <div class="now-playing">
-          <div class="mini-cover">
-            {#if currentTrack.cover_url}
-              <img src={assetUrl(currentTrack.cover_url)} alt="" onerror={hideBrokenImage} />
-            {:else}
-              ♫
-            {/if}
-          </div>
-          <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
-        </div>
-        <div class="player-center">
-          <div class="player-controls">
-            <button class:active={shuffleMode} onclick={toggleShuffle} aria-label="Aleatorio" title="Aleatorio">⇄</button>
-            <button onclick={playPrevious} aria-label="Anterior" title="Anterior">↤</button>
-            <button class="player-toggle" onclick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
-            <button onclick={playNext} aria-label="Siguiente" title="Siguiente">↦</button>
-            <button class:active={showQueuePanel} onclick={() => showQueuePanel = !showQueuePanel} aria-label={`Cola de reproducción (${playbackQueue.length})`} title="Cola de reproducción">≡</button>
-            <button class:active={loopMode !== "off"} onclick={cycleLoopMode} aria-label="Modo bucle" title={loopMode === "off" ? "Bucle desactivado" : loopMode === "all" ? "Repetir lista" : "Repetir canción"}>
-              {loopMode === "one" ? "↻1" : "↻"}
-            </button>
-          </div>
-          <div class="timeline">
-            <span>{formatTime(progress)}</span>
-            <input aria-label="Posición" type="range" min="0" max={duration || 0} value={progress} oninput={seek} />
-            <span>{formatTime(duration)}</span>
-          </div>
-        </div>
-        <input class="volume" aria-label="Volumen" type="range" min="0" max="1" step="0.05" value={volume} oninput={changeVolume} />
+      <PlayerBar
+        {currentTrack}
+        {isPlaying}
+        {shuffleMode}
+        {loopMode}
+        {showQueuePanel}
+        queueLength={playbackQueue.length}
+        {progress}
+        {duration}
+        {volume}
+        onToggleShuffle={toggleShuffle}
+        onPrevious={playPrevious}
+        onTogglePlayback={togglePlayback}
+        onNext={playNext}
+        onToggleQueue={() => showQueuePanel = !showQueuePanel}
+        onCycleLoop={cycleLoopMode}
+        onSeek={seek}
+        onVolume={changeVolume}
+      >
         <audio
           bind:this={audio}
           autoplay
@@ -1942,158 +1517,73 @@
           onended={handleTrackEnded}
           onerror={() => { isPlaying = false; error = "No se pudo reproducir la canción"; }}
         ></audio>
-      </footer>
+      </PlayerBar>
     {/if}
     {#if showQueuePanel}
-      <aside class="queue-panel" class:player-visible={playerVisible} aria-label="Cola de reproducción">
-        <div class="queue-heading">
-          <strong>Cola de reproducción</strong>
-          <span>{playbackQueue.length} canciones</span>
-          <button onclick={() => showQueuePanel = false} aria-label="Cerrar cola">×</button>
-        </div>
-        {#if currentTrack}
-          <div class="queue-current"><small>Reproduciendo</small><strong>{currentTrack.title}</strong></div>
-        {/if}
-        {#each playbackQueue.filter((track) => track.id !== currentTrack?.id) as track}
-          <article>
-            <button onclick={() => playTrack(track)}>
-              <strong>{track.title}</strong>
-              <span>{track.artist || "Artista desconocido"}</span>
-            </button>
-            <button onclick={() => removeQueuedTrack(track.id)} aria-label={`Quitar ${track.title} de la cola`}>×</button>
-          </article>
-        {:else}
-          <p>No hay canciones próximas en la cola.</p>
-        {/each}
-      </aside>
+      <QueuePanel
+        {playbackQueue}
+        {currentTrack}
+        {playerVisible}
+        onClose={() => showQueuePanel = false}
+        onPlayTrack={playTrack}
+        onRemove={removeQueuedTrack}
+      />
     {/if}
   </div>
   {#if showDevicesPanel}
-    <aside class="queue-panel devices-panel" class:player-visible={playerVisible} aria-label="Dispositivos">
-      <div class="queue-heading">
-        <strong>Dispositivos</strong>
-        <span>{devices.length} conectado(s)</span>
-        <button onclick={() => showDevicesPanel = false} aria-label="Cerrar dispositivos">×</button>
-      </div>
-      <p>Mismo perfil, otros dispositivos. Elige cuál controlas o pásale la reproducción.</p>
-      {#if !devicesSocket}
-        <p>Conectando con tus dispositivos…</p>
-      {/if}
-      {#each devices as device (device.device_id)}
-        {@const self = device.device_id === deviceId}
-        <article class="device-card" class:controlling={remoteTargetId === device.device_id}>
-          <div class="device-info">
-            <strong>{device.name}{self ? " · este dispositivo" : ""}</strong>
-            <span>{device.track ? `${device.is_playing ? "Sonando" : "En pausa"}: ${device.track.title}` : "Sin reproducción"}</span>
-          </div>
-          {#if !self}
-            <div class="device-actions">
-              <button onclick={() => toggleRemoteTarget(device)}>{remoteTargetId === device.device_id ? "Dejar de controlar" : "Controlar"}</button>
-              {#if device.track}<button onclick={() => takeOverPlayback(device)}>Pasar aquí</button>{/if}
-            </div>
-          {/if}
-        </article>
-      {/each}
-      {#if devicesSocket && devices.length < 2}
-        <p class="jam-empty">Abre Auralith con esta cuenta en otro dispositivo y aparecerá aquí.</p>
-      {/if}
-      {#each devices.filter((device) => device.device_id === remoteTargetId) as target (target.device_id)}
-        <div class="device-remote">
-          <small>Controlando: {target.name}</small>
-          <div class="jam-controls">
-            <button onclick={() => controlDevice("prev")} aria-label="Anterior">⏮</button>
-            <button onclick={() => controlDevice(target.is_playing ? "pause" : "play")}>{target.is_playing ? "Ⅱ Pausar" : "▶ Reproducir"}</button>
-            <button onclick={() => controlDevice("next")} aria-label="Siguiente">⏭</button>
-          </div>
-        </div>
-      {/each}
-    </aside>
+    <DevicesPanel
+      {devices}
+      connected={Boolean(devicesSocket)}
+      {deviceId}
+      {remoteTargetId}
+      {playerVisible}
+      onClose={() => showDevicesPanel = false}
+      onToggleRemoteTarget={toggleRemoteTarget}
+      onTakeOver={takeOverPlayback}
+      onControl={controlDevice}
+    />
   {/if}
   {#if selectedTrackIds.length}
-    <section class="selection-bar" class:player-visible={playerVisible}>
-      <strong>{selectedTrackIds.length} seleccionada(s)</strong>
-      <button onclick={() => showPlaylistPicker = true}>Añadir a playlist</button>
-      <button class="selection-clear" onclick={() => selectedTrackIds = []}>Cancelar</button>
-    </section>
+    <SelectionBar
+      count={selectedTrackIds.length}
+      {playerVisible}
+      onAddToPlaylist={() => showPlaylistPicker = true}
+      onClear={() => selectedTrackIds = []}
+    />
   {/if}
 
   {#if showPlaylistPicker}
-    <div class="playlist-picker" class:player-visible={playerVisible} role="dialog" aria-modal="true" aria-label="Añadir a playlist">
-      <div class="sheet-heading">
-        <strong>Añadir a una playlist</strong>
-        <button onclick={() => showPlaylistPicker = false}>×</button>
-      </div>
-      <form onsubmit={createPlaylistWithSelection}>
-        <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
-        <button type="submit">Crear y añadir</button>
-      </form>
-      {#each playlists.filter((playlist) => !playlist.shared || playlist.role !== "viewer") as playlist}
-        <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
-          {#if playlist.cover_url}
-            <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
-          {:else}
-            <span>♫</span>
-          {/if}
-          <strong>{playlist.name}</strong>
-        </button>
-      {/each}
-    </div>
+    <PlaylistPicker
+      {playlists}
+      bind:newPlaylistName
+      {playerVisible}
+      onClose={() => showPlaylistPicker = false}
+      onCreateWithSelection={createPlaylistWithSelection}
+      onAddToPlaylist={addSelectedToPlaylist}
+    />
   {/if}
   {#if sharePanelPlaylistId && selectedPlaylist}
-    <div class="upload-playlist-picker share-panel" role="dialog" aria-modal="true" aria-label="Compartir playlist">
-      <div class="sheet-heading">
-        <strong>Compartir “{selectedPlaylist.name}”</strong>
-        <button onclick={closeSharePanel}>×</button>
-      </div>
-      <p class="share-hint">Quien tenga acceso la verá en su biblioteca y podrá reproducirla. Con “Puede editar” también añade y quita canciones; el título, la portada y los accesos siguen siendo tuyos.</p>
-      <form onsubmit={sharePlaylist}>
-        <input bind:value={shareUsername} placeholder="Usuario" maxlength="63" />
-        <select bind:value={shareRole} aria-label="Permiso">
-          <option value="viewer">Solo lectura</option>
-          <option value="editor">Puede editar</option>
-        </select>
-        <button type="submit">Dar acceso</button>
-      </form>
-      {#if shareError}<p class="error">{shareError}</p>{/if}
-      <div class="share-list">
-        {#each playlistShares as share}
-          <div class="share-row">
-            <span>{share.display_name || share.username}<small>@{share.username}</small></span>
-            <div class="share-actions">
-              <button class:active={share.role === "editor"} onclick={() => updateShareRole(share)} title="Cambiar permiso">
-                {share.role === "editor" ? "Puede editar" : "Solo lectura"}
-              </button>
-              <button onclick={() => unsharePlaylist(share.user_id)} aria-label={`Quitar acceso a ${share.username}`}>Quitar</button>
-            </div>
-          </div>
-        {:else}
-          <p class="share-empty">Todavía no compartiste esta playlist.</p>
-        {/each}
-      </div>
-    </div>
+    <SharePanel
+      playlistTitle={selectedPlaylist.name}
+      {playlistShares}
+      {shareError}
+      bind:shareUsername
+      bind:shareRole
+      onClose={closeSharePanel}
+      onShare={sharePlaylist}
+      onUpdateRole={updateShareRole}
+      onUnshare={unsharePlaylist}
+    />
   {/if}
   {#if showUploadPlaylistPicker}
-    <div class="upload-playlist-picker" role="dialog" aria-modal="true" aria-label="Añadir canciones al subir">
-      <div class="sheet-heading">
-        <strong>Añadir las {pendingUploadFiles.length} canciones a playlists</strong>
-        <button onclick={() => { showUploadPlaylistPicker = false; pendingUploadFiles = []; }}>×</button>
-      </div>
-      <form onsubmit={(event) => { event.preventDefault(); confirmUploadPlaylist(); }}>
-        <input bind:value={uploadNewPlaylistName} placeholder="Crear una nueva playlist" maxlength="200" />
-        <div class="upload-playlist-options">
-          {#each playlists.filter((playlist) => !playlist.shared || playlist.role !== "viewer") as playlist}
-            <label>
-              <input
-                type="checkbox"
-                checked={uploadPlaylistIds.includes(playlist.id)}
-                onchange={() => toggleUploadPlaylist(playlist.id)}
-              />
-              <span>{playlist.name}</span>
-            </label>
-          {/each}
-        </div>
-        <button type="submit">Subir y añadir</button>
-      </form>
-    </div>
+    <UploadPlaylistPicker
+      fileCount={pendingUploadFiles.length}
+      {playlists}
+      bind:uploadNewPlaylistName
+      {uploadPlaylistIds}
+      onClose={closeUploadPlaylistPicker}
+      onToggle={toggleUploadPlaylist}
+      onConfirm={confirmUploadPlaylist}
+    />
   {/if}
 {/if}
