@@ -16,6 +16,7 @@ All notable changes to Auralith are documented here. The format follows
 
 ### Changed
 
+- The web frontend is split into components (`apps/web/src/components`) with no change in behaviour.
 - Jams broadcast the full state after every change, so the queue never drifts.
 - Play buttons inside a jam set the jam's track for every member.
 - The jam library lists the whole collection with search; tracks can be queued as next
