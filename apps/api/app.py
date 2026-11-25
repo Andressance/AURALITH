@@ -16,13 +16,14 @@ from typing import Annotated, Callable
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
 from PIL import Image, ImageOps
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
+from sqlalchemy.exc import TimeoutError as DatabaseTimeoutError
 from sqlalchemy.orm import DeclarativeBase, Session
 from sqlalchemy import inspect, text
 
@@ -40,7 +41,10 @@ try:
         is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
+        media_signature,
+        media_signature_expiry,
         SlidingWindowRateLimiter,
+        verify_media_signature,
     )
     from apps.api.core.playlist_import import (
         MAX_CSV_BYTES,
@@ -59,7 +63,10 @@ except ModuleNotFoundError:
         is_allowed_origin,
         is_strong_owner_password,
         login_rate_limiter,
+        media_signature,
+        media_signature_expiry,
         SlidingWindowRateLimiter,
+        verify_media_signature,
     )
     from core.playlist_import import (
         MAX_CSV_BYTES,
@@ -239,6 +246,17 @@ INSECURE_LOCAL_COOKIES = os.getenv("AURALITH_ALLOW_INSECURE_COOKIES", "false").l
 if not COOKIE_SECURE and not INSECURE_LOCAL_COOKIES:
     raise RuntimeError("AURALITH_COOKIE_SECURE=false requires AURALITH_ALLOW_INSECURE_COOKIES=true")
 
+# Media elements (<img>, <audio>) cannot send an Authorization header, and the web
+# client runs on another origin, so those URLs carry a short-lived HMAC signature
+# instead of the session token. The session token must never appear in a URL.
+MEDIA_SECRET = os.getenv("AURALITH_MEDIA_SECRET", "").strip()
+if not MEDIA_SECRET:
+    MEDIA_SECRET = secrets.token_urlsafe(48)
+    logger.warning(
+        "AURALITH_MEDIA_SECRET is not set; media URLs will stop working after a restart"
+    )
+MEDIA_URL_TTL_SECONDS = int(os.getenv("AURALITH_MEDIA_URL_TTL_SECONDS", str(6 * 60 * 60)))
+
 
 def db_session():
     with SessionLocal() as db:
@@ -336,6 +354,16 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
+@app.exception_handler(DatabaseTimeoutError)
+async def database_pool_timeout(request: Request, error: DatabaseTimeoutError):
+    logger.error("Database connection pool exhausted: %s", error)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Database is busy, retry shortly"},
+        headers={"Retry-After": "5"},
+    )
+
+
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -344,12 +372,13 @@ def current_user(
     db: Annotated[Session, Depends(db_session)],
     auralith_session: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-    token: str | None = None,
 ):
     bearer_token = None
     if authorization and authorization.lower().startswith("bearer "):
         bearer_token = authorization[7:].strip()
-    auth_token = bearer_token or auralith_session or token
+    # Session tokens are only accepted from the cookie or the Authorization header.
+    # Never from a query parameter: URLs leak into logs, history and Referer headers.
+    auth_token = bearer_token or auralith_session
     if not auth_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     digest = token_hash(auth_token)
@@ -367,8 +396,36 @@ def current_user(
     return user
 
 
+def media_user(
+    db: Annotated[Session, Depends(db_session)],
+    uid: Annotated[int | None, Query()] = None,
+    exp: Annotated[int | None, Query()] = None,
+    sig: Annotated[str | None, Query()] = None,
+    auralith_session: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+):
+    """Authenticate media requests by signed URL, or by the normal session cookie."""
+    if uid is not None or exp is not None or sig:
+        if uid is None or exp is None or not sig:
+            raise HTTPException(status_code=401, detail="Invalid media signature")
+        if exp < int(datetime.now(timezone.utc).timestamp()):
+            raise HTTPException(status_code=401, detail="Media link expired")
+        if not verify_media_signature(MEDIA_SECRET, uid, exp, sig):
+            raise HTTPException(status_code=401, detail="Invalid media signature")
+        user = db.get(User, uid)
+        if not user:
+            raise HTTPException(status_code=401, detail="User no longer exists")
+        return user
+    return current_user(db=db, auralith_session=auralith_session, authorization=authorization)
+
+
 @app.get("/api/health")
-def health():
+def health(db: Annotated[Session, Depends(db_session)]):
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as error:
+        logger.error("Health check could not reach the database: %s", error)
+        raise HTTPException(status_code=503, detail="Database unavailable") from error
     return {"status": "ok"}
 
 
@@ -473,6 +530,7 @@ def me(user: Annotated[User, Depends(current_user)]):
         "avatar_url": versioned_image_url(
             "/api/profile/avatar",
             Path(user.avatar_path).stem if getattr(user, "avatar_path", None) else None,
+            user,
         ),
     }
 
@@ -683,17 +741,20 @@ async def update_profile_avatar(
 @app.get("/api/profile/avatar")
 async def profile_avatar(
     db: Annotated[Session, Depends(db_session)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(media_user)],
 ):
     def save_path(path: str) -> None:
         user.avatar_path = path
         db.commit()
 
-    return await image_response(
+    response = await image_response(
         getattr(user, "avatar_path", None),
         "Avatar not found",
         save_path,
     )
+    # Streamed image bodies must not hold a pooled database connection.
+    db.close()
+    return response
 
 
 async def update_avatar(file: UploadFile, db: Session, user: User):
@@ -703,7 +764,7 @@ async def update_avatar(file: UploadFile, db: Session, user: User):
     db.commit()
     delete_replaced_image(previous_path, path)
     return {
-        "avatar_url": versioned_image_url("/api/profile/avatar", Path(path).stem),
+        "avatar_url": versioned_image_url("/api/profile/avatar", Path(path).stem, user),
         "content_type": content_type,
     }
 
@@ -760,10 +821,20 @@ async def optimize_image_with_limit(content: bytes) -> bytes:
         return await run_in_threadpool(optimize_image, content)
 
 
-def versioned_image_url(url: str, revision: str | int | None) -> str | None:
+def signed_media_query(user: User) -> str:
+    expires_at = media_signature_expiry(MEDIA_URL_TTL_SECONDS)
+    signature = media_signature(MEDIA_SECRET, user.id, expires_at)
+    return f"uid={user.id}&exp={expires_at}&sig={signature}"
+
+
+def versioned_image_url(url: str, revision: str | int | None, user: User) -> str | None:
     if revision is None:
         return None
-    return f"{url}?v={revision}"
+    return f"{url}?v={revision}&{signed_media_query(user)}"
+
+
+def stream_url_for(track: Track, user: User) -> str:
+    return f"/api/tracks/{track.id}/stream?{signed_media_query(user)}"
 
 
 def delete_replaced_image(previous_path: str | None, current_path: str) -> None:
@@ -973,10 +1044,10 @@ async def upload_track(
     db.add(track)
     db.commit()
     db.refresh(track)
-    return track_to_dict(track)
+    return track_to_dict(track, user)
 
 
-def track_to_dict(track: Track):
+def track_to_dict(track: Track, user: User):
     return {
         "id": track.id,
         "title": str(track.title) if track.title is not None else "Canción sin título",
@@ -986,9 +1057,11 @@ def track_to_dict(track: Track):
         "genre": track.genre,
         "duration": track.duration,
         "file_name": track.file_name,
+        "stream_url": stream_url_for(track, user),
         "cover_url": versioned_image_url(
             f"/api/tracks/{track.id}/cover",
             track.id if getattr(track, "cover_path", None) else None,
+            user,
         ),
     }
 
@@ -1002,14 +1075,14 @@ def list_tracks(db: Annotated[Session, Depends(db_session)], user: Annotated[Use
     if hidden_ids:
         statement = statement.where(Track.id.not_in(hidden_ids))
     tracks = db.scalars(statement.order_by(Track.created_at.desc()))
-    return [track_to_dict(track) for track in tracks]
+    return [track_to_dict(track, user) for track in tracks]
 
 
 @app.get("/api/tracks/{track_id}/cover")
 async def track_cover(
     track_id: int,
     db: Annotated[Session, Depends(db_session)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(media_user)],
 ):
     track = db.scalar(select(Track).where(Track.id == track_id))
     if not track or is_track_hidden(db, user, track_id) or not getattr(track, "cover_path", None):
@@ -1019,7 +1092,10 @@ async def track_cover(
         track.cover_path = path
         db.commit()
 
-    return await image_response(track.cover_path, "Cover not found", save_path)
+    response = await image_response(track.cover_path, "Cover not found", save_path)
+    # Streamed image bodies must not hold a pooled database connection.
+    db.close()
+    return response
 
 
 def escape_like(value: str) -> str:
@@ -1049,28 +1125,37 @@ def search_tracks(
     if hidden_ids:
         statement = statement.where(Track.id.not_in(hidden_ids))
     tracks = db.scalars(statement.order_by(Track.title).limit(100))
-    return [track_to_dict(track) for track in tracks]
+    return [track_to_dict(track, user) for track in tracks]
 
 
 @app.get("/api/tracks/{track_id}/stream")
 def stream_track(
     track_id: int,
     db: Annotated[Session, Depends(db_session)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(media_user)],
     range_header: Annotated[str | None, Header(alias="Range")] = None,
 ):
     track = db.scalar(select(Track).where(Track.id == track_id))
     if not track or is_track_hidden(db, user, track_id):
         raise HTTPException(status_code=404, detail="Track not found")
-    if not storage.exists(track.stored_path):
-        raise HTTPException(status_code=404, detail="Audio file missing")
-    size = storage.size(track.stored_path)
+    stored_path = track.stored_path
+    mime_type = track.mime_type
+    # Return the pooled connection before streaming: the response body can last
+    # for minutes and must not keep a database connection checked out.
+    db.close()
+    try:
+        size = storage.size(stored_path)
+    except Exception as error:
+        if is_missing_storage_object(error):
+            raise HTTPException(status_code=404, detail="Audio file missing") from error
+        logger.warning("Unable to read audio object %s: %s", stored_path, error)
+        raise HTTPException(status_code=503, detail="Audio temporarily unavailable") from error
     start, end = 0, size - 1
     status = 200
     headers = {
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, max-age=3600",
-        "Content-Type": track.mime_type,
+        "Content-Type": mime_type,
     }
     if range_header:
         try:
@@ -1100,10 +1185,10 @@ def stream_track(
             raise HTTPException(status_code=416, detail="Invalid Range")
     headers["Content-Length"] = str(end - start + 1)
     return StreamingResponse(
-        iter_storage(storage, track.stored_path, start, end),
+        iter_storage(storage, stored_path, start, end),
         status_code=status,
         headers=headers,
-        media_type=track.mime_type,
+        media_type=mime_type,
     )
 
 
@@ -1131,6 +1216,7 @@ def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[
         "cover_url": versioned_image_url(
             f"/api/playlists/{p.id}/cover",
             Path(p.cover_path).stem if getattr(p, "cover_path", None) else None,
+            user,
         ),
     } for p in playlists]
 
@@ -1245,6 +1331,7 @@ def get_playlist(
     cover_url = versioned_image_url(
         f"/api/playlists/{playlist.id}/cover",
         Path(playlist.cover_path).stem if getattr(playlist, "cover_path", None) else None,
+        user,
     )
     if not track_ids:
         return {
@@ -1265,7 +1352,7 @@ def get_playlist(
         "id": playlist.id,
         "name": playlist.name,
         "cover_url": cover_url,
-        "tracks": [track_to_dict(tracks_by_id[track_id]) for track_id in track_ids if track_id in tracks_by_id],
+        "tracks": [track_to_dict(tracks_by_id[track_id], user) for track_id in track_ids if track_id in tracks_by_id],
     }
 
 
@@ -1288,6 +1375,7 @@ async def update_playlist_cover(
         "cover_url": versioned_image_url(
             f"/api/playlists/{playlist.id}/cover",
             Path(path).stem,
+            user,
         ),
         "content_type": content_type,
     }
@@ -1297,7 +1385,7 @@ async def update_playlist_cover(
 async def playlist_cover(
     playlist_id: int,
     db: Annotated[Session, Depends(db_session)],
-    user: Annotated[User, Depends(current_user)],
+    user: Annotated[User, Depends(media_user)],
 ):
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
     if not playlist:
@@ -1307,11 +1395,14 @@ async def playlist_cover(
         playlist.cover_path = path
         db.commit()
 
-    return await image_response(
+    response = await image_response(
         getattr(playlist, "cover_path", None),
         "Playlist cover not found",
         save_path,
     )
+    # Streamed image bodies must not hold a pooled database connection.
+    db.close()
+    return response
 
 
 @app.delete("/api/playlists/{playlist_id}")
@@ -1479,7 +1570,7 @@ def list_favorites(db: Annotated[Session, Depends(db_session)], user: Annotated[
             Track.id.not_in(hidden_ids),
         )
     )
-    return [track_to_dict(track) for track in tracks]
+    return [track_to_dict(track, user) for track in tracks]
 
 
 @app.delete("/api/favorites/{track_id}")

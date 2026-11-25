@@ -98,15 +98,13 @@
   }
 
   function streamUrl(track) {
-    const token = sessionToken ? `?token=${encodeURIComponent(sessionToken)}` : "";
-    return `${API_BASE}/api/tracks/${track.id}/stream${token}`;
+    return `${API_BASE}${track.stream_url || `/api/tracks/${track.id}/stream`}`;
   }
 
   function assetUrl(path) {
     if (!path) return "";
-    const separator = path.includes("?") ? "&" : "?";
-    const token = sessionToken ? `${separator}token=${encodeURIComponent(sessionToken)}` : "";
-    return `${API_BASE}${path}${token}`;
+    if (path.startsWith("http")) return path;
+    return `${API_BASE}${path}`;
   }
 
   function titleInitial(title) {

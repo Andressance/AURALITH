@@ -207,3 +207,33 @@ def test_storage_providers_implement_protocol(tmp_path: Path):
     assert issubclass(S3StorageProvider, StorageProvider)
     assert issubclass(SupabaseStorageProvider, StorageProvider)
 
+
+def test_s3_exists_reports_missing_objects_as_absent(monkeypatch):
+    from botocore.exceptions import ClientError
+    from apps.api.infrastructure.storage.s3 import S3StorageProvider
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL_S3", "https://storage.example.com")
+    monkeypatch.setenv("AWS_BUCKET_NAME", "music")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+
+    provider = S3StorageProvider()
+
+    def missing(*args, **kwargs):
+        raise ClientError(
+            {"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject"
+        )
+
+    monkeypatch.setattr(provider.client, "head_object", missing)
+
+    assert provider.exists("missing.mp3") is False
+
+
+def test_client_ip_uses_forwarded_header_behind_render_proxy(monkeypatch):
+    monkeypatch.delenv("AURALITH_TRUSTED_PROXIES", raising=False)
+    request = SimpleNamespace(
+        client=SimpleNamespace(host="10.28.218.22"),
+        headers={"x-forwarded-for": "203.0.113.9, 10.28.218.22"},
+    )
+    assert get_client_ip(request) == "203.0.113.9"
+

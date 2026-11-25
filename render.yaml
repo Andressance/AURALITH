@@ -41,6 +41,8 @@ services:
       - key: AURALITH_CORS_ORIGINS
         sync: false
       - key: AURALITH_TRUSTED_PROXIES
-        sync: false
+        value: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.1/32,::1/128
+      - key: AURALITH_MEDIA_SECRET
+        generateValue: true
       - key: AURALITH_COOKIE_SAMESITE
         value: "none"

@@ -96,8 +96,11 @@ class S3StorageProvider:
         try:
             self.size(key)
             return True
-        except self.client.exceptions.NoSuchKey:
-            return False
+        except ClientError as error:
+            code = str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
+            if code in {"NoSuchKey", "404", "NotFound"}:
+                return False
+            raise
 
     def size(self, key: str) -> int:
         response = self.client.head_object(Bucket=self.bucket, Key=key)

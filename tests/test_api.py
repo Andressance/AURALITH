@@ -561,3 +561,35 @@ def test_search_escapes_sql_wildcards():
 def login_rate_limiter_reset():
     from apps.api.core.security import login_rate_limiter
     login_rate_limiter.attempts.clear()
+
+
+def test_media_urls_are_signed_and_query_tokens_are_rejected():
+    login()
+    key = "signed-media-test.mp3"
+    storage.upload(key, b"abcdef", "audio/mpeg")
+    from apps.api.app import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Signed media",
+            sha256="signed-media-test",
+            file_name="signed-media-test.mp3",
+            stored_path=key,
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    tracks = client.get("/api/tracks").json()
+    item = next(track for track in tracks if track["id"] == track_id)
+    stream_url = item["stream_url"]
+    assert "sig=" in stream_url
+    assert "token=" not in stream_url
+
+    anonymous = TestClient(app)
+    assert anonymous.get(stream_url).status_code == 200
+    assert anonymous.get(stream_url.replace("sig=", "sig=0")).status_code == 401
+    assert anonymous.get(f"/api/tracks/{track_id}/stream?token=anything").status_code == 401
