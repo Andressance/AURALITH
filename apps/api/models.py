@@ -7,7 +7,15 @@ FastAPI instance and its route table all run at import time).
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -82,6 +90,8 @@ class PlaylistShare(Base):
     id = Column(Integer, primary_key=True)
     playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    can_edit = Column(Boolean, nullable=False, default=False)
+    saved = Column(Boolean, nullable=False, default=True)
 
 
 class Favorite(Base):

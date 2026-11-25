@@ -997,9 +997,9 @@ Después de importar una playlist, se mostrará:
 
 # 17. Compartición
 
-En V1 la compartición es explícita y revocable dentro de la instancia, y no depende de la amistad: el propietario de una playlist concede acceso por nombre de usuario y puede quitarlo en cualquier momento. Quien la recibe puede verla y reproducirla, pero no editarla ni gestionar accesos.
+En V1 la compartición es explícita y revocable dentro de la instancia, y no depende de la amistad: el propietario concede acceso por nombre de usuario, elige si es «solo lectura» o «puede editar» y puede quitarlo en cualquier momento. Quien la recibe la guarda en su biblioteca con un clic y la ve en sus listas marcada con el autor, aunque no sea suya; los colaboradores añaden y quitan canciones, mientras que el título, la portada, el borrado y la gestión de accesos siguen siendo del propietario.
 
-En la práctica el catálogo de audio ya es común a toda la instancia, así que la compartición controla la visibilidad de la playlist, no el acceso a las canciones. Los niveles separados `VIEW` / `PLAY` solo tendrían sentido con bibliotecas privadas por usuario, que pertenecen a V1.5.
+El catálogo de audio ya es común a toda la instancia, así que la compartición controla la visibilidad de la playlist y quién puede modificarla, no el acceso a las canciones. Los niveles separados `VIEW` / `PLAY` solo tendrían sentido con bibliotecas privadas por usuario, que pertenecen a V1.5.
 
 La amistad no será necesaria para compartir recursos.
 

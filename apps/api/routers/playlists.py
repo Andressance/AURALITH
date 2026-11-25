@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def playlist_summary(playlist: Playlist, user: User, owner: str, shared: bool) -> dict:
+def playlist_summary(playlist: Playlist, user: User, owner: str, role: str, saved: bool) -> dict:
     return {
         "id": playlist.id,
         "name": playlist.name,
@@ -39,24 +39,38 @@ def playlist_summary(playlist: Playlist, user: User, owner: str, shared: bool) -
             user,
         ),
         "owner": owner,
-        "shared": shared,
+        "role": role,
+        "shared": role != "owner",
+        "saved": saved,
     }
 
 
 def playable_playlist(db: Session, user: User, playlist_id: int):
-    """Return (playlist, is_owner) when the user may read it, else None."""
+    """Return (playlist, role, share) when the user may read it, else None.
+
+    ``role`` is ``owner``, ``editor`` (can add and remove tracks) or ``viewer``.
+    """
     playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id))
     if not playlist:
         return None
     if playlist.user_id == user.id:
-        return playlist, True
+        return playlist, "owner", None
     share = db.scalar(
         select(PlaylistShare).where(
             PlaylistShare.playlist_id == playlist_id,
             PlaylistShare.user_id == user.id,
         )
     )
-    return (playlist, False) if share else None
+    if not share:
+        return None
+    return playlist, ("editor" if share.can_edit else "viewer"), share
+
+
+def editable_playlist(db: Session, user: User, playlist_id: int) -> Playlist:
+    access = playable_playlist(db, user, playlist_id)
+    if not access or access[1] == "viewer":
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return access[0]
 
 
 def owned_playlist(db: Session, user: User, playlist_id: int) -> Playlist:
@@ -72,17 +86,23 @@ def owned_playlist(db: Session, user: User, playlist_id: int) -> Playlist:
 def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
     own = db.scalars(select(Playlist).where(Playlist.user_id == user.id).order_by(Playlist.id))
     owner_name = user.display_name or user.username
-    items = [playlist_summary(p, user, owner_name, False) for p in own]
+    items = [playlist_summary(p, user, owner_name, "owner", True) for p in own]
     shared = db.execute(
-        select(Playlist, User)
+        select(Playlist, User, PlaylistShare)
         .join(PlaylistShare, PlaylistShare.playlist_id == Playlist.id)
         .join(User, User.id == Playlist.user_id)
         .where(PlaylistShare.user_id == user.id)
         .order_by(Playlist.id)
     ).all()
     items.extend(
-        playlist_summary(playlist, user, account.display_name or account.username, True)
-        for playlist, account in shared
+        playlist_summary(
+            playlist,
+            user,
+            account.display_name or account.username,
+            "editor" if share.can_edit else "viewer",
+            bool(share.saved),
+        )
+        for playlist, account, share in shared
     )
     return items
 
@@ -185,9 +205,10 @@ def get_playlist(
     access = playable_playlist(db, user, playlist_id)
     if not access:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    playlist, is_owner = access
-    owner = user if is_owner else db.scalar(select(User).where(User.id == playlist.user_id))
+    playlist, role, share = access
+    owner = user if role == "owner" else db.scalar(select(User).where(User.id == playlist.user_id))
     owner_name = (owner.display_name or owner.username) if owner else "Auralith"
+    saved = True if share is None else bool(share.saved)
     entries = db.scalars(
         select(PlaylistTrack)
         .where(PlaylistTrack.playlist_id == playlist_id)
@@ -205,7 +226,9 @@ def get_playlist(
             "name": playlist.name,
             "cover_url": cover_url,
             "owner": owner_name,
-            "shared": not is_owner,
+            "role": role,
+            "shared": role != "owner",
+            "saved": saved,
             "tracks": [],
         }
     hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
@@ -221,7 +244,9 @@ def get_playlist(
         "name": playlist.name,
         "cover_url": cover_url,
         "owner": owner_name,
-        "shared": not is_owner,
+        "role": role,
+        "shared": role != "owner",
+        "saved": saved,
         "tracks": [track_to_dict(tracks_by_id[track_id], user) for track_id in track_ids if track_id in tracks_by_id],
     }
 
@@ -256,7 +281,7 @@ async def playlist_cover(
     access = playable_playlist(db, user, playlist_id)
     if not access:
         raise HTTPException(status_code=404, detail="Playlist not found")
-    playlist, _ = access
+    playlist = access[0]
 
     def save_path(path: str) -> None:
         playlist.cover_path = path
@@ -291,9 +316,9 @@ def add_playlist_track(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
+    editable_playlist(db, user, playlist_id)
     track = db.scalar(select(Track).where(Track.id == track_id))
-    if not playlist or not track or is_track_hidden(db, user, track_id):
+    if not track or is_track_hidden(db, user, track_id):
         raise HTTPException(status_code=404, detail="Playlist or track not found")
     position = db.query(PlaylistTrack).filter(PlaylistTrack.playlist_id == playlist_id).count()
     db.add(PlaylistTrack(playlist_id=playlist_id, track_id=track_id, position=position))
@@ -307,9 +332,7 @@ def add_playlist_tracks(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    editable_playlist(db, user, playlist_id)
     track_ids = payload.get("track_ids")
     if not isinstance(track_ids, list):
         raise HTTPException(status_code=400, detail="track_ids must be a list")
@@ -355,9 +378,7 @@ def remove_playlist_track(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    editable_playlist(db, user, playlist_id)
     entry = db.scalar(
         select(PlaylistTrack).where(
             PlaylistTrack.playlist_id == playlist_id,
@@ -388,9 +409,18 @@ def list_playlist_shares(
             "user_id": share.user_id,
             "username": account.username,
             "display_name": account.display_name,
+            "role": "editor" if share.can_edit else "viewer",
+            "saved": bool(share.saved),
         }
         for share, account in rows
     ]
+
+
+def parse_share_role(payload: dict) -> bool:
+    role = str(payload.get("role", "viewer")).strip().lower()
+    if role not in {"viewer", "editor"}:
+        raise HTTPException(status_code=400, detail="Role must be 'viewer' or 'editor'")
+    return role == "editor"
 
 
 @router.post("/api/playlists/{playlist_id}/shares")
@@ -417,14 +447,76 @@ def share_playlist(
             PlaylistShare.user_id == account.id,
         )
     )
-    if not existing:
-        db.add(PlaylistShare(playlist_id=playlist_id, user_id=account.id))
-        db.commit()
+    can_edit = parse_share_role(payload)
+    if existing:
+        existing.can_edit = can_edit
+    else:
+        db.add(
+            PlaylistShare(
+                playlist_id=playlist_id,
+                user_id=account.id,
+                can_edit=can_edit,
+                saved=True,
+            )
+        )
+    db.commit()
     return {
         "user_id": account.id,
         "username": account.username,
         "display_name": account.display_name,
+        "role": "editor" if can_edit else "viewer",
+        "saved": True,
     }
+
+
+@router.patch("/api/playlists/{playlist_id}/shares/{account_id}")
+def update_playlist_share(
+    playlist_id: int,
+    account_id: int,
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    owned_playlist(db, user, playlist_id)
+    share = db.scalar(
+        select(PlaylistShare).where(
+            PlaylistShare.playlist_id == playlist_id,
+            PlaylistShare.user_id == account_id,
+        )
+    )
+    if not share:
+        raise HTTPException(status_code=404, detail="Share not found")
+    share.can_edit = parse_share_role(payload)
+    db.commit()
+    return {"user_id": account_id, "role": "editor" if share.can_edit else "viewer"}
+
+
+@router.post("/api/playlists/{playlist_id}/library")
+def save_playlist_to_library(
+    playlist_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    access = playable_playlist(db, user, playlist_id)
+    if not access or access[1] == "owner":
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    access[2].saved = True
+    db.commit()
+    return {"saved": True}
+
+
+@router.delete("/api/playlists/{playlist_id}/library")
+def remove_playlist_from_library(
+    playlist_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    access = playable_playlist(db, user, playlist_id)
+    if not access or access[1] == "owner":
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    access[2].saved = False
+    db.commit()
+    return {"saved": False}
 
 
 @router.delete("/api/playlists/{playlist_id}/shares/{account_id}")

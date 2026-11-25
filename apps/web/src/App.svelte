@@ -8,6 +8,7 @@
   let playlists = [];
   let sharePanelPlaylistId = null;
   let shareUsername = "";
+  let shareRole = "viewer";
   let playlistShares = [];
   let shareError = "";
   let favorites = [];
@@ -601,6 +602,7 @@
     if (!selectedPlaylist?.id) return;
     sharePanelPlaylistId = selectedPlaylist.id;
     shareUsername = "";
+    shareRole = "viewer";
     shareError = "";
     try {
       playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
@@ -613,6 +615,7 @@
   function closeSharePanel() {
     sharePanelPlaylistId = null;
     shareUsername = "";
+    shareRole = "viewer";
     shareError = "";
     playlistShares = [];
   }
@@ -625,7 +628,7 @@
       await api(`/api/playlists/${sharePanelPlaylistId}/shares`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: shareUsername.trim() })
+        body: JSON.stringify({ username: shareUsername.trim(), role: shareRole })
       });
       shareUsername = "";
       playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
@@ -641,6 +644,34 @@
       playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
     } catch (cause) {
       shareError = cause.message;
+    }
+  }
+
+  async function updateShareRole(share) {
+    if (!sharePanelPlaylistId) return;
+    try {
+      await api(`/api/playlists/${sharePanelPlaylistId}/shares/${share.user_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: share.role === "editor" ? "viewer" : "editor" })
+      });
+      playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
+    } catch (cause) {
+      shareError = cause.message;
+    }
+  }
+
+  async function togglePlaylistLibrary(playlist) {
+    try {
+      await api(`/api/playlists/${playlist.id}/library`, {
+        method: playlist.saved ? "DELETE" : "POST"
+      });
+      await loadPlaylists();
+      if (selectedPlaylist?.id === playlist.id) {
+        selectedPlaylist = await api(`/api/playlists/${playlist.id}`);
+      }
+    } catch (cause) {
+      error = cause.message;
     }
   }
 
@@ -951,7 +982,7 @@
           <input bind:value={playlistName} placeholder="Nueva playlist" />
           <button onclick={createPlaylist} aria-label="Crear playlist">＋</button>
         </div>
-        {#each playlists as playlist}
+        {#each playlists.filter((playlist) => !playlist.shared || playlist.saved) as playlist}
           <div
             class="playlist-item"
             class:selected={selectedPlaylistId === playlist.id}
@@ -1201,8 +1232,13 @@
                   <span>♫</span>
                 {/if}
                 <strong>{playlist.name}</strong>
-                <small>{playlist.shared ? `De ${playlist.owner}` : "Playlist"}</small>
+                <small>{playlist.shared ? `De ${playlist.owner}${playlist.role === "editor" ? " · colaboras" : ""}` : "Playlist"}</small>
                 </button>
+                {#if playlist.shared}
+                  <button class="playlist-library" class:saved={playlist.saved} onclick={() => togglePlaylistLibrary(playlist)}>
+                    {playlist.saved ? "✓ En tu biblioteca" : "＋ Añadir a mi biblioteca"}
+                  </button>
+                {/if}
                 <button
                   class="playlist-card-play"
                   onclick={() => playPlaylist(playlist)}
@@ -1260,17 +1296,23 @@
             {:else}
               ♫
             {/if}
-            {#if !selectedPlaylist.shared}
+            {#if selectedPlaylist.role === "owner"}
               <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadPlaylistCover} /></label>
             {/if}
           </div>
           <div>
-            <span>{selectedPlaylist.shared ? "Compartida contigo" : "Playlist"}</span>
+            <span>{selectedPlaylist.role === "owner" ? "Playlist" : selectedPlaylist.role === "editor" ? "Colaboras en esta playlist" : "Compartida contigo"}</span>
             <h2>{selectedPlaylist.name}</h2>
             <p>{selectedPlaylist.shared ? `De ${selectedPlaylist.owner}` : "Auralith"} · {selectedPlaylist.tracks.length} canciones</p>
-            {#if !selectedPlaylist.shared}
-              <button class="share-playlist" onclick={openSharePanel}>Compartir</button>
-            {/if}
+            <div class="hero-actions">
+              {#if selectedPlaylist.role === "owner"}
+                <button class="share-playlist" onclick={openSharePanel}>Compartir</button>
+              {:else}
+                <button class="share-playlist" onclick={() => togglePlaylistLibrary(selectedPlaylist)}>
+                  {selectedPlaylist.saved ? "Quitar de mi biblioteca" : "Añadir a mi biblioteca"}
+                </button>
+              {/if}
+            </div>
           </div>
         </section>
         <section class="track-list playlist-tracks">
@@ -1285,7 +1327,7 @@
               <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
               <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
               <button class="row-action" onclick={() => enqueueTrack(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
-              {#if !selectedPlaylist.shared}
+              {#if selectedPlaylist.role !== "viewer"}
                 <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
               {/if}
             </article>
@@ -1421,7 +1463,7 @@
         <input bind:value={newPlaylistName} placeholder="Nueva playlist" maxlength="200" />
         <button type="submit">Crear y añadir</button>
       </form>
-      {#each playlists as playlist}
+      {#each playlists.filter((playlist) => !playlist.shared || playlist.role !== "viewer") as playlist}
         <button class="playlist-picker-item" onclick={() => addSelectedToPlaylist(playlist.id)}>
           {#if playlist.cover_url}
             <img src={assetUrl(playlist.cover_url)} alt="" loading="lazy" decoding="async" />
@@ -1439,9 +1481,13 @@
         <strong>Compartir “{selectedPlaylist.name}”</strong>
         <button onclick={closeSharePanel}>×</button>
       </div>
-      <p class="share-hint">Quien tenga acceso puede ver y reproducir la playlist, pero no editarla ni gestionar sus accesos.</p>
+      <p class="share-hint">Quien tenga acceso la verá en su biblioteca y podrá reproducirla. Con “Puede editar” también añade y quita canciones; el título, la portada y los accesos siguen siendo tuyos.</p>
       <form onsubmit={sharePlaylist}>
         <input bind:value={shareUsername} placeholder="Usuario" maxlength="63" />
+        <select bind:value={shareRole} aria-label="Permiso">
+          <option value="viewer">Solo lectura</option>
+          <option value="editor">Puede editar</option>
+        </select>
         <button type="submit">Dar acceso</button>
       </form>
       {#if shareError}<p class="error">{shareError}</p>{/if}
@@ -1449,7 +1495,12 @@
         {#each playlistShares as share}
           <div class="share-row">
             <span>{share.display_name || share.username}<small>@{share.username}</small></span>
-            <button onclick={() => unsharePlaylist(share.user_id)} aria-label={`Quitar acceso a ${share.username}`}>Quitar</button>
+            <div class="share-actions">
+              <button class:active={share.role === "editor"} onclick={() => updateShareRole(share)} title="Cambiar permiso">
+                {share.role === "editor" ? "Puede editar" : "Solo lectura"}
+              </button>
+              <button onclick={() => unsharePlaylist(share.user_id)} aria-label={`Quitar acceso a ${share.username}`}>Quitar</button>
+            </div>
           </div>
         {:else}
           <p class="share-empty">Todavía no compartiste esta playlist.</p>
@@ -1466,7 +1517,7 @@
       <form onsubmit={(event) => { event.preventDefault(); confirmUploadPlaylist(); }}>
         <input bind:value={uploadNewPlaylistName} placeholder="Crear una nueva playlist" maxlength="200" />
         <div class="upload-playlist-options">
-          {#each playlists as playlist}
+          {#each playlists.filter((playlist) => !playlist.shared || playlist.role !== "viewer") as playlist}
             <label>
               <input
                 type="checkbox"

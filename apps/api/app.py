@@ -42,7 +42,7 @@ except OperationalError as error:
 
 app = FastAPI(
     title="Auralith",
-    version="1.0.0",
+    version="1.1.0",
     docs_url=None if os.getenv("AURALITH_ENV", "production").lower() != "development" else "/docs",
     redoc_url=None,
 )

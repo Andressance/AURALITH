@@ -4,6 +4,18 @@ All notable changes to Auralith are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.1.0] — 2026-11-25
+
+### Added
+
+- Two share levels for playlists: read-only and collaborative editing, switchable per
+  person from the share panel.
+- Collaborators can add and remove tracks of a shared playlist; the owner keeps the
+  title, the cover and access management.
+- Shared playlists can be kept in or removed from your library, and the library
+  sidebar only lists the ones you saved.
+- Playlist cards show the author and whether you collaborate on them.
+
 ## [1.0.0] — 2026-11-25
 
 First stable release: a self-hosted personal music cloud for one owner and the

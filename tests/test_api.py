@@ -631,6 +631,88 @@ def test_media_urls_are_signed_and_query_tokens_are_rejected():
     assert anonymous.get(f"/api/tracks/{track_id}/stream?token=anything").status_code == 401
 
 
+def test_playlist_collaboration_and_library_saving():
+    login()
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Collab"})
+    code = invitation.json()["code"]
+    assert client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "collab",
+            "display_name": "Collab",
+            "password": "GuestPassword123!",
+        },
+    ).status_code == 200
+    guest_client = TestClient(app)
+    assert guest_client.post(
+        "/api/auth/login",
+        json={"username": "collab", "password": "GuestPassword123!"},
+    ).status_code == 200
+
+    playlist = client.post("/api/playlists", json={"name": "Collab mix"}).json()
+    storage.upload("collab-track.mp3", b"collab-audio", "audio/mpeg")
+    from apps.api.models import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Collab tune",
+            sha256="collab-tune",
+            file_name="collab.mp3",
+            stored_path="collab-track.mp3",
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    assert client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "collab"}
+    ).status_code == 200
+
+    # A viewer cannot change the playlist.
+    assert guest_client.post(
+        f"/api/playlists/{playlist['id']}/tracks/{track_id}"
+    ).status_code == 404
+
+    share = client.get(f"/api/playlists/{playlist['id']}/shares").json()[0]
+    assert share["role"] == "viewer"
+    promoted = client.patch(
+        f"/api/playlists/{playlist['id']}/shares/{share['user_id']}",
+        json={"role": "editor"},
+    )
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "editor"
+
+    detail = guest_client.get(f"/api/playlists/{playlist['id']}").json()
+    assert detail["role"] == "editor"
+    assert guest_client.post(
+        f"/api/playlists/{playlist['id']}/tracks/{track_id}"
+    ).status_code == 200
+    assert len(
+        guest_client.get(f"/api/playlists/{playlist['id']}").json()["tracks"]
+    ) == 1
+
+    # Collaborators still cannot delete the playlist or hand out access.
+    assert guest_client.delete(f"/api/playlists/{playlist['id']}").status_code == 404
+    assert guest_client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "owner"}
+    ).status_code == 404
+
+    # A shared playlist can be removed from the library and added back.
+    assert guest_client.delete(
+        f"/api/playlists/{playlist['id']}/library"
+    ).status_code == 200
+    listing = guest_client.get("/api/playlists").json()
+    assert next(item for item in listing if item["id"] == playlist["id"])["saved"] is False
+    assert guest_client.post(
+        f"/api/playlists/{playlist['id']}/library"
+    ).status_code == 200
+    listing = guest_client.get("/api/playlists").json()
+    assert next(item for item in listing if item["id"] == playlist["id"])["saved"] is True
+
+
 def test_playlist_sharing_is_explicit_and_revocable():
     login()
     invitation = client.post("/api/owner/invitations", json={"display_name": "Sharee"})
