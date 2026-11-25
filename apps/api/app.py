@@ -22,10 +22,9 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from mutagen import File as MutagenFile
 from PIL import Image, ImageOps
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, select
-from sqlalchemy.exc import TimeoutError as DatabaseTimeoutError
-from sqlalchemy.orm import DeclarativeBase, Session
-from sqlalchemy import inspect, text
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, TimeoutError as DatabaseTimeoutError
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 image_processing_semaphore = asyncio.Semaphore(1)
@@ -99,139 +98,33 @@ else:
     )
 
 
-class Base(DeclarativeBase):
-    pass
+try:
+    from apps.api.models import (
+        Base,  # noqa: F401 - re-exported for callers that still import it here
+        Favorite,
+        HiddenTrack,
+        Invitation,
+        Playlist,
+        PlaylistTrack,
+        Session,
+        Track,
+        User,
+        normalize_utc,
+    )
+except ModuleNotFoundError:
+    from models import (
+        Base,  # noqa: F401
+        Favorite,
+        HiddenTrack,
+        Invitation,
+        Playlist,
+        PlaylistTrack,
+        Session,
+        Track,
+        User,
+        normalize_utc,
+    )
 
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True, nullable=False)
-    display_name = Column(String)
-    avatar_path = Column(String)
-    password_hash = Column(String, nullable=False)
-    role = Column(String, default="owner", nullable=False)
-
-
-class Session(Base):
-    __tablename__ = "sessions"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    token_hash = Column(String, unique=True, nullable=False, index=True)
-    expires_at = Column(DateTime, nullable=False)
-
-
-def normalize_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-class Track(Base):
-    __tablename__ = "tracks"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    title = Column(String, nullable=False)
-    artist = Column(String)
-    album = Column(String)
-    year = Column(Integer)
-    genre = Column(String)
-    duration = Column(Integer)
-    isrc = Column(String)
-    sha256 = Column(String, unique=False, nullable=False, index=True)
-    file_name = Column(String, nullable=False)
-    stored_path = Column(String, nullable=False)
-    mime_type = Column(String, nullable=False)
-    cover_path = Column(String)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-
-class Playlist(Base):
-    __tablename__ = "playlists"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    name = Column(String, nullable=False)
-    cover_path = Column(String)
-
-
-class PlaylistTrack(Base):
-    __tablename__ = "playlist_tracks"
-    id = Column(Integer, primary_key=True)
-    playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=False, index=True)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
-    position = Column(Integer, nullable=False)
-
-
-class Favorite(Base):
-    __tablename__ = "favorites"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
-
-
-class HiddenTrack(Base):
-    __tablename__ = "hidden_tracks"
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
-
-
-class Invitation(Base):
-    __tablename__ = "invitations"
-    id = Column(Integer, primary_key=True)
-    code = Column(String, unique=True, nullable=False, index=True)
-    display_name = Column(String)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    used_at = Column(DateTime)
-
-
-Base.metadata.create_all(engine)
-
-
-def ensure_optional_columns():
-    columns = {
-        "users": (
-            ("display_name", "VARCHAR"),
-            ("avatar_path", "VARCHAR"),
-        ),
-        "tracks": (("cover_path", "VARCHAR"), ("isrc", "VARCHAR")),
-        "playlists": (("cover_path", "VARCHAR"),),
-    }
-    identifier_pattern = re.compile(r"^[a-zA-Z0-9_]+$")
-    inspector = inspect(engine)
-    with engine.begin() as connection:
-        for table_name, table_columns in columns.items():
-            if not identifier_pattern.fullmatch(table_name):
-                raise ValueError(f"Invalid table name: {table_name}")
-            existing = {column["name"] for column in inspector.get_columns(table_name)}
-            for column_name, column_type in table_columns:
-                if not identifier_pattern.fullmatch(column_name) or not identifier_pattern.fullmatch(column_type):
-                    raise ValueError(f"Invalid column identifier: {column_name} {column_type}")
-                if column_name not in existing:
-                    connection.execute(
-                        text(
-                            f"ALTER TABLE {table_name} "
-                            f"ADD COLUMN {column_name} {column_type}"
-                        )
-                    )
-        indexes = (
-            ("idx_playlist_tracks_playlist_id", "playlist_tracks", "playlist_id"),
-            ("idx_playlist_tracks_track_id", "playlist_tracks", "track_id"),
-            ("idx_playlists_user_id", "playlists", "user_id"),
-            ("idx_hidden_tracks_user_id", "hidden_tracks", "user_id"),
-            ("idx_favorites_user_id", "favorites", "user_id"),
-            ("idx_tracks_user_id", "tracks", "user_id"),
-            ("idx_tracks_sha256", "tracks", "sha256"),
-        )
-        for idx_name, table, col in indexes:
-            try:
-                connection.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({col})"))
-            except Exception:
-                pass
-
-
-ensure_optional_columns()
 password_hasher = PasswordHasher()
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
@@ -288,8 +181,14 @@ def bootstrap_owner(db: Session):
     db.commit()
 
 
-with SessionLocal() as db:
-    bootstrap_owner(db)
+try:
+    with SessionLocal() as db:
+        bootstrap_owner(db)
+except OperationalError as error:
+    raise RuntimeError(
+        "The database schema is missing or out of date. "
+        "Run 'alembic upgrade head' before starting the API."
+    ) from error
 
 
 app = FastAPI(

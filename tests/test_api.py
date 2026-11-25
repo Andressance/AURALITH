@@ -18,6 +18,16 @@ os.environ["AURALITH_DATA_DIR"] = str(DATA_DIR)
 os.environ["AURALITH_STORAGE_DIR"] = str(DATA_DIR / "music")
 os.environ["AURALITH_DB_URL"] = f"sqlite:///{DATA_DIR / 'test.db'}"
 
+# Build the test schema with the real migrations, not create_all: this way the
+# baseline is exercised by the suite instead of drifting from the models.
+from alembic import command
+from alembic.config import Config
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+migration_config = Config(str(PROJECT_ROOT / "alembic.ini"))
+migration_config.set_main_option("script_location", str(PROJECT_ROOT / "apps" / "api" / "migrations"))
+command.upgrade(migration_config, "head")
+
 from fastapi.testclient import TestClient
 from apps.api.app import app, Playlist, Track, SessionLocal, storage, normalize_utc, optimize_image
 

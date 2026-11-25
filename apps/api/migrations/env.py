@@ -1,0 +1,74 @@
+"""Alembic environment for Auralith.
+
+The database URL comes from AURALITH_DB_URL (the same variable the API reads), so
+migrations always target the database the app uses. Models are imported from
+apps/api/models.py, which has no import-time side effects.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from apps.api.infrastructure.database.sqlalchemy_provider import (  # noqa: E402
+    SQLAlchemyDatabaseProvider,
+)
+from apps.api.models import Base  # noqa: E402
+
+config = context.config
+target_metadata = Base.metadata
+
+
+def database_url() -> str:
+    url = os.getenv("AURALITH_DB_URL", "").strip()
+    if not url:
+        data_dir = Path(os.getenv("AURALITH_DATA_DIR", "./data")).resolve()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        url = f"sqlite:///{data_dir / 'auralith.db'}"
+    return SQLAlchemyDatabaseProvider.normalize_url(url)
+
+
+def configure(connection=None) -> None:
+    url = database_url()
+    options = {
+        "target_metadata": target_metadata,
+        "compare_type": True,
+        # SQLite cannot ALTER most columns in place; batch mode rewrites the table.
+        "render_as_batch": url.startswith("sqlite"),
+    }
+    if connection is None:
+        context.configure(url=url, literal_binds=True, dialect_opts={"paramstyle": "named"}, **options)
+    else:
+        context.configure(connection=connection, **options)
+
+
+def run_migrations_offline() -> None:
+    configure()
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    section = config.get_section(config.config_ini_section, {})
+    section["sqlalchemy.url"] = database_url()
+    connectable = engine_from_config(
+        section,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+    with connectable.connect() as connection:
+        configure(connection)
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()

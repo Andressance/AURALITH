@@ -98,7 +98,10 @@
   }
 
   function streamUrl(track) {
-    return `${API_BASE}${track.stream_url || `/api/tracks/${track.id}/stream`}`;
+    // Media URLs are signed by the API and the session token is no longer accepted
+    // in the query string, so there is no unauthenticated URL to build here.
+    if (!track?.stream_url) return undefined;
+    return `${API_BASE}${track.stream_url}`;
   }
 
   function assetUrl(path) {
@@ -595,6 +598,10 @@
   }
 
   async function play(track) {
+    if (!track?.stream_url) {
+      error = "No se pudo reproducir la canción";
+      return;
+    }
     if (!playbackQueue.some((item) => item.id === track.id)) {
       playbackQueue = selectedPlaylist?.tracks?.length
         ? selectedPlaylist.tracks
