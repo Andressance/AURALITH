@@ -26,4 +26,4 @@ RUN if [ -f /tmp/build-context/pyproject.toml ]; then \
 
 EXPOSE 8000
 
-CMD ["/bin/sh", "-c", "cd /app && python /app/apps/api/migrations/run.py && if [ -f /app/apps/api/app.py ]; then uvicorn apps.api.app:app --host 0.0.0.0 --port ${PORT:-8000}; else uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}; fi"]
+CMD ["/bin/sh", "-c", "cd /app && if [ -f apps/api/migrations/run.py ]; then python apps/api/migrations/run.py; elif [ -f migrations/run.py ]; then python migrations/run.py; else echo ERROR-no-migration-runner-in-image; exit 1; fi && if [ -f apps/api/app.py ]; then uvicorn apps.api.app:app --host 0.0.0.0 --port ${PORT:-8000}; else uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}; fi"]

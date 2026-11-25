@@ -12,14 +12,37 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-ROOT = Path(__file__).resolve().parents[3]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+HERE = Path(__file__).resolve()
 
-from apps.api.infrastructure.database.sqlalchemy_provider import (  # noqa: E402
-    SQLAlchemyDatabaseProvider,
-)
-from apps.api.models import Base  # noqa: E402
+
+def _import_roots(start: Path, depth: int = 4) -> list[Path]:
+    """Candidate import roots for both supported layouts.
+
+    The repository root (apps/api/migrations) and the API directory built on its own
+    (/app/migrations, where app.py is the module and there is no apps/ package).
+    Walking up avoids IndexError from a short parents sequence.
+    """
+    roots, current = [start], start
+    for _ in range(depth):
+        if current.parent == current:
+            break
+        current = current.parent
+        roots.append(current)
+    return roots
+
+
+for candidate in _import_roots(HERE.parent):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+try:
+    from apps.api.infrastructure.database.sqlalchemy_provider import (
+        SQLAlchemyDatabaseProvider,
+    )
+    from apps.api.models import Base
+except ModuleNotFoundError:
+    from infrastructure.database.sqlalchemy_provider import SQLAlchemyDatabaseProvider
+    from models import Base
 
 config = context.config
 target_metadata = Base.metadata

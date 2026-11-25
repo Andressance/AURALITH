@@ -15,12 +15,28 @@ from alembic import command
 from alembic.config import Config
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = MIGRATIONS_DIR.parents[2]
+
+
+def _import_roots(start: Path, depth: int = 4) -> list[Path]:
+    """Candidate import roots for both supported layouts.
+
+    The repository root (apps/api/migrations) and the API directory built on its own
+    (/app/migrations, where app.py is the module and there is no apps/ package).
+    Walking up avoids IndexError from a short parents sequence.
+    """
+    roots, current = [start], start
+    for _ in range(depth):
+        if current.parent == current:
+            break
+        current = current.parent
+        roots.append(current)
+    return roots
 
 
 def main() -> int:
-    if str(PROJECT_ROOT) not in sys.path:
-        sys.path.insert(0, str(PROJECT_ROOT))
+    for root in _import_roots(MIGRATIONS_DIR):
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
     print(f"Applying database migrations from {MIGRATIONS_DIR}", flush=True)
