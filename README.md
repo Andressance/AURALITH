@@ -44,6 +44,7 @@ The backend is not coupled to Supabase or to a local installation:
 - Set `AURALITH_DB_URL` to any SQLAlchemy-compatible PostgreSQL or SQLite URL.
 - Set `AURALITH_STORAGE_PROVIDER=local` for filesystem storage.
 - Set `AURALITH_STORAGE_PROVIDER=supabase` and provide `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SUPABASE_STORAGE_BUCKET` for Supabase Storage. `SUPABASE_SERVICE_ROLE_KEY` remains accepted only as deprecated compatibility.
+- Set `AURALITH_STORAGE_PROVIDER=gdrive` with `AURALITH_GDRIVE_CLIENT_ID`, `AURALITH_GDRIVE_CLIENT_SECRET`, `AURALITH_GDRIVE_REFRESH_TOKEN`, and `AURALITH_GDRIVE_FOLDER_ID` to keep audio and artwork in a folder of your own Google Drive. Playback streams with HTTP Range, so seeking works without copying files to the server. The ZIP backup only covers SQLite plus local storage.
 - Supabase PostgreSQL uses a regular PostgreSQL `AURALITH_DB_URL`; an optional adapter can later enable Supabase-specific features without changing the API modules.
 
 ### MVP scope
@@ -722,10 +723,21 @@ class StorageProvider:
 - Sistema de archivos local.
 - Supabase Storage privado.
 - Almacenamiento compatible con S3 (por ejemplo, Neon Storage).
+- Google Drive (carpeta propia, OAuth con refresh token).
 
-## Almacenamiento secundario futuro
+## Google Drive como almacenamiento
 
-Google Drive y Dropbox podrían funcionar como tier frío opcional: archivos menos usados se recuperarían bajo demanda y, si se configura, se conservarían temporalmente en una caché limitada. No son proveedores disponibles hoy ni se usarán como origen principal del streaming hasta validar OAuth, cuotas, URLs/rangos y recuperación ante fallos.
+`AURALITH_STORAGE_PROVIDER=gdrive` guarda canciones y portadas en una carpeta de tu Drive, que pasa a ser el origen del streaming: no se copia nada al disco del servidor. La descarga usa `Range`, así que se puede buscar dentro de una canción sin bajar el archivo entero.
+
+Puesta en marcha:
+
+1. En Google Cloud Console crea un proyecto y activa **Google Drive API**.
+2. Configura la pantalla de consentimiento (tipo *External*, con tu cuenta como usuario de prueba) y crea un **ID de cliente OAuth** de tipo *Aplicación de escritorio*.
+3. Obtén un refresh token con el [OAuth 2.0 Playground](https://developers.google.com/oauthplayground): engranaje → *Use your own OAuth credentials*, autoriza `https://www.googleapis.com/auth/drive` y canjea el código por tokens.
+4. Crea una carpeta en Drive y copia su ID del final de la URL (`https://drive.google.com/drive/folders/<ID>`).
+5. Define `AURALITH_GDRIVE_CLIENT_ID`, `AURALITH_GDRIVE_CLIENT_SECRET`, `AURALITH_GDRIVE_REFRESH_TOKEN` y `AURALITH_GDRIVE_FOLDER_ID`.
+
+Límites a tener en cuenta: se usa OAuth de usuario (una cuenta de servicio no tiene cuota propia y no puede subir a un Drive personal), el almacenamiento cuenta contra tu cuota de Drive, el refresh token puede revocarse desde tu cuenta y cada operación resuelve el nombre del archivo a un ID, que se cachea en memoria. La copia de seguridad ZIP sigue limitada a SQLite con almacenamiento local.
 
 La aplicación deberá poder cambiar de proveedor sin modificar los módulos de biblioteca o reproducción.
 

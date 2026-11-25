@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
+from apps.api.infrastructure.storage.gdrive import GoogleDriveStorageProvider
 from apps.api.infrastructure.storage.interface import StorageProvider
 from apps.api.infrastructure.storage.local import LocalStorageProvider
 from apps.api.infrastructure.storage.s3 import S3StorageProvider
@@ -206,6 +207,7 @@ def test_storage_providers_implement_protocol(tmp_path: Path):
     assert issubclass(LocalStorageProvider, StorageProvider)
     assert issubclass(S3StorageProvider, StorageProvider)
     assert issubclass(SupabaseStorageProvider, StorageProvider)
+    assert issubclass(GoogleDriveStorageProvider, StorageProvider)
 
 
 def test_s3_exists_reports_missing_objects_as_absent(monkeypatch):

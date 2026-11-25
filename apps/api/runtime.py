@@ -7,6 +7,7 @@ from pathlib import Path
 
 from apps.api.core.security import build_allowed_origins
 from apps.api.infrastructure.database import SQLAlchemyDatabaseProvider
+from apps.api.infrastructure.storage.gdrive import GoogleDriveStorageProvider
 from apps.api.infrastructure.storage.local import LocalStorageProvider
 from apps.api.infrastructure.storage.s3 import S3StorageProvider
 from apps.api.infrastructure.storage.supabase import SupabaseStorageProvider
@@ -30,9 +31,11 @@ elif storage_provider_name == "local":
     storage = LocalStorageProvider(STORAGE_DIR)
 elif storage_provider_name == "neon":
     storage = S3StorageProvider()
+elif storage_provider_name == "gdrive":
+    storage = GoogleDriveStorageProvider()
 else:
     raise RuntimeError(
-        "AURALITH_STORAGE_PROVIDER must be 'local', 'supabase', or 'neon'"
+        "AURALITH_STORAGE_PROVIDER must be 'local', 'supabase', 'neon', or 'gdrive'"
     )
 
 ALLOWED_ORIGINS = build_allowed_origins(os.getenv("AURALITH_CORS_ORIGINS", ""))
