@@ -9,6 +9,11 @@
   let sharePanelPlaylistId = null;
   let shareUsername = "";
   let shareRole = "viewer";
+  let jamCode = "";
+  let jamJoinCode = "";
+  let jamState = null;
+  let jamSocket = null;
+  let jamError = "";
   let playlistShares = [];
   let shareError = "";
   let favorites = [];
@@ -68,6 +73,7 @@
     const path = window.location.pathname;
     if (path.startsWith("/profile")) return "profile";
     if (path.startsWith("/playlists")) return "playlists";
+    if (path.startsWith("/jam")) return "jam";
     return "library";
   }
 
@@ -215,6 +221,7 @@
     authenticated = true;
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
     if (profile.role === "owner") await loadOwnerUsers();
+    resumeJam();
   }
 
   async function loadOwnerUsers() {
@@ -675,6 +682,184 @@
     }
   }
 
+  function connectJamSocket() {
+    closeJamSocket();
+    if (!jamCode) return;
+    const base = API_BASE || window.location.origin;
+    const socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/jam/${jamCode}`);
+    jamSocket = socket;
+    socket.onopen = () => socket.send(JSON.stringify({ token: sessionToken }));
+    socket.onmessage = (event) => {
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (message.type === "state") {
+        jamState = message.state;
+        applyJamPlayback(message.state);
+      } else if (message.type === "control") {
+        jamState = {
+          ...jamState,
+          current_track: message.current_track,
+          is_playing: message.is_playing,
+          position: message.position
+        };
+        applyJamPlayback(jamState);
+      } else if (message.type === "participants") {
+        jamState = { ...jamState, participants: message.participants };
+      } else if (message.type === "queue_add") {
+        jamState = { ...jamState, queue: [...(jamState?.queue || []), message.item] };
+      } else if (message.type === "queue_remove") {
+        jamState = {
+          ...jamState,
+          queue: (jamState?.queue || []).filter((item) => item.id !== message.item_id)
+        };
+      } else if (message.type === "ended") {
+        leaveJamLocal();
+        jamError = "El anfitrión terminó el jam";
+      }
+    };
+    socket.onclose = () => {
+      if (jamSocket === socket) jamSocket = null;
+    };
+  }
+
+  function closeJamSocket() {
+    if (!jamSocket) return;
+    jamSocket.onclose = null;
+    jamSocket.close();
+    jamSocket = null;
+  }
+
+  function leaveJamLocal() {
+    closeJamSocket();
+    localStorage.removeItem("auralith_jam");
+    jamCode = "";
+    jamState = null;
+  }
+
+  async function resumeJam() {
+    const stored = localStorage.getItem("auralith_jam");
+    if (!stored) return;
+    try {
+      const result = await api("/api/jams/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: stored })
+      });
+      jamCode = result.code;
+      jamState = result.state;
+      connectJamSocket();
+    } catch {
+      localStorage.removeItem("auralith_jam");
+    }
+  }
+
+  function leaveJam() {
+    leaveJamLocal();
+    if (audio) audio.pause();
+  }
+
+  async function applyJamPlayback(state) {
+    const track = state?.current_track;
+    if (!track) {
+      if (audio && !audio.paused) audio.pause();
+      return;
+    }
+    if (currentTrack?.id !== track.id) {
+      await play(track);
+    }
+    if (!audio) return;
+    const target = Number(state.position) || 0;
+    if (Math.abs(audio.currentTime - target) > 1.5) audio.currentTime = target;
+    if (state.is_playing) {
+      audio.play().catch(() => {});
+    } else if (!audio.paused) {
+      audio.pause();
+    }
+  }
+
+  async function createJam() {
+    jamError = "";
+    try {
+      const result = await api("/api/jams", { method: "POST" });
+      jamCode = result.code;
+      localStorage.setItem("auralith_jam", result.code);
+      jamState = result.state;
+      connectJamSocket();
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  async function joinJam() {
+    const code = jamJoinCode.trim().toUpperCase();
+    if (!code) return;
+    jamError = "";
+    try {
+      const result = await api("/api/jams/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code })
+      });
+      jamCode = result.code;
+      localStorage.setItem("auralith_jam", result.code);
+      jamJoinCode = "";
+      jamState = result.state;
+      connectJamSocket();
+      applyJamPlayback(result.state);
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  async function jamControl(action, extra = {}) {
+    if (!jamCode) return;
+    try {
+      await api(`/api/jams/${jamCode}/control`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...extra })
+      });
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  async function jamQueueTrack(track) {
+    if (!jamCode) return;
+    try {
+      await api(`/api/jams/${jamCode}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ track_id: track.id })
+      });
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  async function jamRemoveQueueItem(item) {
+    if (!jamCode) return;
+    try {
+      await api(`/api/jams/${jamCode}/queue/${item.id}`, { method: "DELETE" });
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  async function endJam() {
+    if (!jamCode) return;
+    try {
+      await api(`/api/jams/${jamCode}/end`, { method: "POST" });
+    } catch (cause) {
+      jamError = cause.message;
+    }
+    leaveJam();
+  }
+
   async function downloadBackup() {
     try {
       // A relative URL would hit the web origin, not the API, and a new tab cannot
@@ -753,6 +938,10 @@
   }
 
   function togglePlayback() {
+    if (jamCode) {
+      jamControl(jamState?.is_playing ? "pause" : "play", { position: audio?.currentTime || 0 });
+      return;
+    }
     if (!audio) return;
     if (audio.paused) {
       audio.play();
@@ -777,6 +966,10 @@
   }
 
   function playNext() {
+    if (jamCode) {
+      jamControl("next");
+      return;
+    }
     const index = getNextQueueIndex();
     if (index >= 0) play(playbackQueue[index]);
   }
@@ -972,6 +1165,7 @@
         <button class="nav-item" onclick={() => { navigateView("library"); searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
         <button class="nav-item" class:active={activeView === "playlists"} onclick={() => navigateView("playlists")}>♫ <span>Playlists</span></button>
         <button class="nav-item" class:active={activeView === "profile"} onclick={() => navigateView("profile")}>● <span>Perfil</span></button>
+      <button class="nav-item" class:active={activeView === "jam"} onclick={() => navigateView("jam")}>◉ <span>Jam</span></button>
       </nav>
       <div class="sidebar-library">
         <div class="sidebar-heading">
@@ -1051,6 +1245,98 @@
         </div>
       {/if}
       {#if error}<p class="error">{error}</p>{/if}
+      {#if activeView === "jam"}
+        <section class="jam-page">
+          <header class="jam-header">
+            <div><span>Escuchar juntos</span><h2>Jam</h2></div>
+            {#if jamCode}
+              <button class="jam-leave" onclick={leaveJam}>Salir</button>
+            {/if}
+          </header>
+
+          {#if jamError}<p class="error">{jamError}</p>{/if}
+
+          {#if !jamCode}
+            <div class="jam-start">
+              <article class="jam-card">
+                <strong>Crea un jam</strong>
+                <p>Comparte el código y escuchad lo mismo a la vez. Cualquiera puede cambiar de canción.</p>
+                <button class="primary-upload" onclick={createJam}>Crear jam</button>
+              </article>
+              <article class="jam-card">
+                <strong>Entrar en un jam</strong>
+                <p>Pide el código a quien lo haya creado.</p>
+                <form onsubmit={(event) => { event.preventDefault(); joinJam(); }}>
+                  <input bind:value={jamJoinCode} placeholder="Código" maxlength="12" />
+                  <button type="submit">Entrar</button>
+                </form>
+              </article>
+            </div>
+          {:else}
+            <div class="jam-code">
+              <span>Código del jam</span>
+              <strong>{jamCode}</strong>
+              <button onclick={() => navigator.clipboard?.writeText(jamCode)}>Copiar</button>
+            </div>
+
+            <div class="jam-now">
+              <div class="jam-cover">
+                {#if jamState?.current_track?.cover_url}
+                  <img src={assetUrl(jamState.current_track.cover_url)} alt="" />
+                {:else}
+                  ♫
+                {/if}
+              </div>
+              <div class="jam-now-text">
+                <span>{jamState?.is_playing ? "Sonando ahora" : "En pausa"}</span>
+                <strong>{jamState?.current_track ? text(jamState.current_track.title, "Canción sin título") : "Nada sonando"}</strong>
+                <small>{jamState?.current_track ? text(jamState.current_track.artist, "Artista desconocido") : "Añade una canción a la cola"}</small>
+              </div>
+              <div class="jam-controls">
+                <button onclick={() => jamControl(jamState?.is_playing ? "pause" : "play", { position: audio?.currentTime || 0 })} aria-label="Reproducir o pausar">
+                  {jamState?.is_playing ? "Ⅱ" : "▶"}
+                </button>
+                <button onclick={() => jamControl("next")} aria-label="Siguiente">↦</button>
+              </div>
+            </div>
+
+            <div class="jam-people">
+              {#each jamState?.participants || [] as person}
+                <span class="jam-person">{person.display_name || person.username}{person.id === jamState.host_user_id ? " · anfitrión" : ""}</span>
+              {/each}
+            </div>
+
+            <div class="jam-columns">
+              <section class="jam-panel">
+                <h3>Cola del jam</h3>
+                {#each jamState?.queue || [] as item}
+                  <div class="jam-row">
+                    <span>{text(item.track.title, "Canción sin título")}<small>{text(item.track.artist, "Artista desconocido")}</small></span>
+                    <button onclick={() => jamRemoveQueueItem(item)} aria-label="Quitar de la cola">×</button>
+                  </div>
+                {:else}
+                  <p class="jam-empty">La cola está vacía.</p>
+                {/each}
+              </section>
+              <section class="jam-panel">
+                <h3>Tu biblioteca</h3>
+                {#each tracks.slice(0, 12) as track}
+                  <div class="jam-row">
+                    <span>{text(track.title, "Canción sin título")}<small>{text(track.artist, "Artista desconocido")}</small></span>
+                    <button onclick={() => jamQueueTrack(track)} aria-label={`Añadir ${text(track.title, "canción")} a la cola`}>＋</button>
+                  </div>
+                {:else}
+                  <p class="jam-empty">Sube música para añadirla.</p>
+                {/each}
+              </section>
+            </div>
+
+            {#if profile && jamState?.host_user_id === profile.id}
+              <button class="jam-end" onclick={endJam}>Terminar el jam</button>
+            {/if}
+          {/if}
+        </section>
+      {/if}
       {#if activeView === "profile"}
         <section class="profile-page">
           <button class="page-back" onclick={() => navigateView("library")}><span>←</span> Volver a la biblioteca</button>

@@ -631,6 +631,102 @@ def test_media_urls_are_signed_and_query_tokens_are_rejected():
     assert anonymous.get(f"/api/tracks/{track_id}/stream?token=anything").status_code == 401
 
 
+def test_jams_are_shared_and_anyone_can_control():
+    login()
+    owner_token = client.post(
+        "/api/auth/login",
+        json={"username": "owner", "password": "TestPassword123!"},
+    ).json()["token"]
+
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Jammer"})
+    code = invitation.json()["code"]
+    assert client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "jammer",
+            "display_name": "Jammer",
+            "password": "GuestPassword123!",
+        },
+    ).status_code == 200
+    guest_client = TestClient(app)
+    assert guest_client.post(
+        "/api/auth/login",
+        json={"username": "jammer", "password": "GuestPassword123!"},
+    ).status_code == 200
+
+    created = client.post("/api/jams").json()
+    jam_code = created["code"]
+    assert len(jam_code) == 6
+    assert created["state"]["participants"][0]["username"] == "owner"
+
+    # A jam is not readable until you join it.
+    assert guest_client.get(f"/api/jams/{jam_code}").status_code == 403
+    joined = guest_client.post("/api/jams/join", json={"code": jam_code})
+    assert joined.status_code == 200
+    assert {p["username"] for p in joined.json()["state"]["participants"]} == {
+        "owner",
+        "jammer",
+    }
+
+    storage.upload("jam-track.mp3", b"jam-audio", "audio/mpeg")
+    from apps.api.models import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Jam tune",
+            sha256="jam-tune",
+            file_name="jam.mp3",
+            stored_path="jam-track.mp3",
+            duration=180,
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    assert guest_client.post(
+        f"/api/jams/{jam_code}/queue", json={"track_id": track_id}
+    ).status_code == 200
+
+    # Everyone in the jam can drive playback, not only the host.
+    assert guest_client.post(
+        f"/api/jams/{jam_code}/control", json={"action": "play", "track_id": track_id}
+    ).status_code == 200
+    state = client.get(f"/api/jams/{jam_code}").json()
+    assert state["current_track"]["id"] == track_id
+    assert state["is_playing"] is True
+
+    # next takes the first queued track and clears it.
+    assert guest_client.post(
+        f"/api/jams/{jam_code}/control", json={"action": "next"}
+    ).status_code == 200
+    state = client.get(f"/api/jams/{jam_code}").json()
+    assert state["current_track"]["id"] == track_id
+    assert state["queue"] == []
+
+    # The socket sends a snapshot to a member and refuses a bad token.
+    with client.websocket_connect(f"/ws/jam/{jam_code}") as socket:
+        socket.send_json({"token": owner_token})
+        message = socket.receive_json()
+        assert message["type"] == "state"
+        assert message["state"]["code"] == jam_code
+
+    outsider = TestClient(app)
+    rejected = False
+    try:
+        with outsider.websocket_connect(f"/ws/jam/{jam_code}") as socket:
+            socket.send_json({"token": "not-a-real-token"})
+            socket.receive_json()
+    except Exception:
+        rejected = True
+    assert rejected
+
+    assert client.post(f"/api/jams/{jam_code}/end").status_code == 200
+    assert client.get(f"/api/jams/{jam_code}").status_code == 404
+
+
 def test_playlist_collaboration_and_library_saving():
     login()
     invitation = client.post("/api/owner/invitations", json={"display_name": "Collab"})

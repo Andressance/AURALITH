@@ -22,6 +22,7 @@ from apps.api.routers import (
     auth,
     favorites,
     health,
+    jams,
     maintenance,
     playlists,
     tracks,
@@ -42,7 +43,7 @@ except OperationalError as error:
 
 app = FastAPI(
     title="Auralith",
-    version="1.1.0",
+    version="1.2.0",
     docs_url=None if os.getenv("AURALITH_ENV", "production").lower() != "development" else "/docs",
     redoc_url=None,
 )
@@ -119,5 +120,6 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tracks.router)
 app.include_router(playlists.router)
+app.include_router(jams.router)
 app.include_router(favorites.router)
 app.include_router(maintenance.router)

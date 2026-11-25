@@ -4,6 +4,25 @@ All notable changes to Auralith are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [1.2.0] — 2026-11-25
+
+### Added
+
+- Jams: create a room, share its six-character code and listen to the same track at
+  the same time with other accounts of the instance.
+- Real-time state over WebSocket: playback changes, participants and queue updates
+  reach every listener, with a REST snapshot for late joiners and page reloads.
+- Anyone in the jam can play, pause, skip and queue tracks; the queue shows who added
+  each track and the host can end the jam.
+- The jam is remembered locally, so reloading the page rejoins it.
+
+### Security
+
+- A jam is invisible until you join it: reading, controlling and queueing all require
+  membership, and sockets authenticate before receiving anything.
+- The WebSocket handshake uses the session token; rooms are keyed by the jam code and
+  a bad token closes the socket with 4401.
+
 ## [1.1.0] — 2026-11-25
 
 ### Added

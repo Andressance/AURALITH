@@ -58,6 +58,8 @@ The backend is not coupled to Supabase or to a local installation:
 - Private, per-user library isolation
 - Range-based audio streaming
 - Playlists and favorites
+- Playlist sharing with viewer and editor roles
+- Jams: synchronized listening rooms with a shared queue
 - ZIP backup and SQLite restore
 - Docker Compose deployment
 
@@ -1019,6 +1021,18 @@ PLAY
 La compartición deberá ser explícita, revocable y independiente de la relación entre usuarios.
 
 Ser amigo de alguien no dará acceso automático a su biblioteca.
+
+## Jams: escuchar juntos
+
+Un jam es una sala temporal dentro de la instancia. Cualquier cuenta crea uno, recibe un código de seis caracteres y lo comparte; quien lo introduce entra en la misma sala y escucha lo mismo que el resto.
+
+- El estado vive en la base de datos, no en memoria: el track actual, la posición, si está en pausa, la cola y los participantes.
+- La sincronización viaja por WebSocket (`/ws/jam/{code}`) y el primer mensaje del socket autentica con el token de sesión. Al conectar se recibe un snapshot completo, así que quien entra tarde o recarga la página cae en el segundo correcto y recupera la cola.
+- Cualquier participante controla la reproducción: play, pausa, salto, seek y añadir a la cola. Solo el anfitrión termina el jam.
+- El reproductor global obedece al jam mientras estás dentro: sus botones de play y siguiente envían la orden a la sala en lugar de reproducir en local.
+- Un jam es invisible hasta unirse: consultar, controlar o encolar sin ser participante devuelve 403.
+
+El código es la única llave, igual que el enlace de una invitación: quien lo tenga puede entrar. Los jams son de una sola instancia; los jams entre instancias distintas quedan para la federación de V2, que necesitará un canal entre servidores y no solo un socket dentro de la misma API.
 
 ---
 

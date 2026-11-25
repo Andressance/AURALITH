@@ -11,6 +11,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -92,6 +93,41 @@ class PlaylistShare(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     can_edit = Column(Boolean, nullable=False, default=False)
     saved = Column(Boolean, nullable=False, default=True)
+
+
+class Jam(Base):
+    __tablename__ = "jams"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(12), nullable=False, unique=True, index=True)
+    host_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String(16), nullable=False, default="active")
+    current_track_id = Column(Integer, ForeignKey("tracks.id"), nullable=True)
+    is_playing = Column(Boolean, nullable=False, default=False)
+    position = Column(Float, nullable=False, default=0.0)
+    position_updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class JamParticipant(Base):
+    __tablename__ = "jam_participants"
+
+    id = Column(Integer, primary_key=True)
+    jam_id = Column(Integer, ForeignKey("jams.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    joined_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (UniqueConstraint("jam_id", "user_id", name="uq_jam_participant"),)
+
+
+class JamQueueItem(Base):
+    __tablename__ = "jam_queue_items"
+
+    id = Column(Integer, primary_key=True)
+    jam_id = Column(Integer, ForeignKey("jams.id"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    added_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    added_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class Favorite(Base):
