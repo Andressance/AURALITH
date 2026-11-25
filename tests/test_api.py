@@ -727,6 +727,131 @@ def test_jams_are_shared_and_anyone_can_control():
     assert client.get(f"/api/jams/{jam_code}").status_code == 404
 
 
+def _owner_track(title: str, key: str) -> int:
+    from apps.api.models import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title=title,
+            sha256=key,
+            file_name=f"{key}.mp3",
+            stored_path=f"{key}.mp3",
+            duration=120,
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        return track.id
+
+
+def test_jam_queue_order_next_guard_and_device_relay():
+    login()
+    owner_token = client.post(
+        "/api/auth/login", json={"username": "owner", "password": "TestPassword123!"}
+    ).json()["token"]
+    jam_code = client.post("/api/jams").json()["code"]
+    first = _owner_track("Queue first", "queue-first")
+    second = _owner_track("Queue second", "queue-second")
+
+    client.post(f"/api/jams/{jam_code}/queue", json={"track_id": first})
+    client.post(f"/api/jams/{jam_code}/queue", json={"track_id": second, "front": True})
+    queue = [item["track"]["id"] for item in client.get(f"/api/jams/{jam_code}").json()["queue"]]
+    assert queue == [second, first]
+
+    queue_item_ids = [item["id"] for item in client.get(f"/api/jams/{jam_code}").json()["queue"]]
+    assert client.post(
+        f"/api/jams/{jam_code}/queue/{queue_item_ids[1]}/move", json={"direction": "up"}
+    ).status_code == 200
+    queue = [item["track"]["id"] for item in client.get(f"/api/jams/{jam_code}").json()["queue"]]
+    assert queue == [first, second]
+    assert client.post(
+        f"/api/jams/{jam_code}/queue/{queue_item_ids[1]}/move", json={"direction": "sideways"}
+    ).status_code == 400
+
+    # A late "ended" from a client that heard another track must not skip the current one.
+    client.post(f"/api/jams/{jam_code}/control", json={"action": "play", "track_id": second})
+    client.post(f"/api/jams/{jam_code}/control", json={"action": "next", "expected_track_id": first})
+    state = client.get(f"/api/jams/{jam_code}").json()
+    assert state["current_track"]["id"] == second
+    assert len(state["queue"]) == 2
+
+    client.post(f"/api/jams/{jam_code}/control", json={"action": "next", "expected_track_id": second})
+    state = client.get(f"/api/jams/{jam_code}").json()
+    assert state["current_track"]["id"] == first
+    assert [item["track"]["id"] for item in state["queue"]] == [second]
+
+    # With nothing queued, next stops instead of replaying the same track.
+    client.post(f"/api/jams/{jam_code}/control", json={"action": "next"})
+    client.post(f"/api/jams/{jam_code}/control", json={"action": "next"})
+    state = client.get(f"/api/jams/{jam_code}").json()
+    assert state["queue"] == []
+    assert state["is_playing"] is False
+    client.post(f"/api/jams/{jam_code}/end")
+
+    with client.websocket_connect("/ws/devices") as laptop:
+        laptop.send_json({"token": owner_token, "device_id": "laptop", "name": "Laptop"})
+        assert laptop.receive_json()["devices"][0]["device_id"] == "laptop"
+        with client.websocket_connect("/ws/devices") as phone:
+            phone.send_json({"token": owner_token, "device_id": "phone", "name": "Phone"})
+            assert {d["device_id"] for d in phone.receive_json()["devices"]} == {"laptop", "phone"}
+            laptop.receive_json()
+            laptop.send_json(
+                {"type": "presence", "is_playing": True, "position": 12, "track": {"id": 7, "title": "Hi", "stream_url": "x"}}
+            )
+            listed = {d["device_id"]: d for d in phone.receive_json()["devices"]}
+            assert listed["laptop"]["is_playing"] is True
+            assert listed["laptop"]["track"] == {"id": 7, "title": "Hi", "artist": "", "cover_url": None}
+            laptop.receive_json()
+            phone.send_json({"type": "relay", "target": "laptop", "message": {"cmd": "next"}})
+            assert laptop.receive_json() == {"type": "relay", "from": "phone", "message": {"cmd": "next"}}
+
+    outsider = TestClient(app)
+    with outsider.websocket_connect("/ws/devices") as socket:
+        socket.send_json({"token": "not-a-real-token", "device_id": "x"})
+        try:
+            socket.receive_json()
+            raise AssertionError("bad token must not be accepted")
+        except AssertionError:
+            raise
+        except Exception:
+            pass
+
+
+def _receive_until(socket, predicate):
+    for _ in range(10):
+        message = socket.receive_json()
+        if predicate(message):
+            return message
+    raise AssertionError("expected message never arrived")
+
+
+def test_only_one_device_per_profile_plays_at_a_time():
+    login()
+    owner_token = client.post(
+        "/api/auth/login", json={"username": "owner", "password": "TestPassword123!"}
+    ).json()["token"]
+    with client.websocket_connect("/ws/devices") as tab_a:
+        tab_a.send_json({"token": owner_token, "device_id": "tab-a", "name": "A"})
+        _receive_until(tab_a, lambda m: m["type"] == "devices")
+        with client.websocket_connect("/ws/devices") as tab_b:
+            tab_b.send_json({"token": owner_token, "device_id": "tab-b", "name": "B"})
+            _receive_until(tab_b, lambda m: m["type"] == "devices")
+            _receive_until(tab_a, lambda m: m["type"] == "devices")
+
+            tab_a.send_json({"type": "presence", "is_playing": True, "position": 1, "track": None})
+            _receive_until(tab_a, lambda m: m["type"] == "devices")
+            _receive_until(tab_b, lambda m: m["type"] == "devices")
+
+            # Starting playback on B pauses A and the list says only B is playing.
+            tab_b.send_json({"type": "presence", "is_playing": True, "position": 2, "track": None})
+            pause = _receive_until(tab_a, lambda m: m["type"] == "relay")
+            assert pause["message"] == {"cmd": "pause"}
+            listed = {d["device_id"]: d["is_playing"] for d in _receive_until(tab_b, lambda m: m["type"] == "devices")["devices"]}
+            assert listed == {"tab-a": False, "tab-b": True}
+
+
 def test_playlist_collaboration_and_library_saving():
     login()
     invitation = client.post("/api/owner/invitations", json={"display_name": "Collab"})

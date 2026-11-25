@@ -1901,3 +1901,56 @@ body {
 }
 .share-row button:hover { background: var(--danger-bg); color: var(--danger-soft); }
 .share-empty { margin: 0; color: var(--ink-dim); font-size: 12px; }
+
+/* Jam and devices: labelled actions instead of bare icons. */
+.jam-panel h3 { display: flex; align-items: center; gap: 6px; }
+.jam-panel h3 small { color: var(--ink-dim); font-size: 11px; }
+.jam-hint { margin: 0 0 4px; color: var(--ink-dim); font-size: 12px; line-height: 1.4; }
+.jam-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 6px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+.jam-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.jam-row-actions button,
+.jam-row-actions button:disabled {
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-pill);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.jam-row-actions button:disabled { opacity: 0.35; }
+.jam-controls button:disabled { opacity: 0.4; cursor: default; }
+.device-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.device-card.controlling { border-color: var(--brand-200); }
+.device-info { display: grid; gap: 2px; min-width: 0; }
+.device-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.device-info span { color: var(--ink-soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.device-actions button {
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 6px 11px;
+  background: var(--surface-3);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+.device-remote { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.device-remote small { color: var(--ink-soft); font-size: 12px; }

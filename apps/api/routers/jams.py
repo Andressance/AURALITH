@@ -130,6 +130,26 @@ def _state_payload(db: Session, jam: Jam) -> dict:
     }
 
 
+def _queue_items(db: Session, jam: Jam) -> list[JamQueueItem]:
+    return list(
+        db.scalars(
+            select(JamQueueItem)
+            .where(JamQueueItem.jam_id == jam.id)
+            .order_by(JamQueueItem.position, JamQueueItem.id)
+        )
+    )
+
+
+def _renumber(items: list[JamQueueItem]) -> None:
+    for index, item in enumerate(items):
+        item.position = index
+
+
+def _broadcast_state(db: Session, jam: Jam) -> None:
+    # Every change sends the full snapshot so clients never keep a stale queue.
+    notify(manager.broadcast(jam.code, {"type": "state", "state": _state_payload(db, jam)}))
+
+
 @router.post("/api/jams")
 def create_jam(
     db: Annotated[Session, Depends(db_session)],
@@ -188,22 +208,45 @@ def add_to_queue(
 ):
     jam = _get_jam(db, code)
     _participant(db, jam, user)
-    track_id = payload.get("track_id")
-    track = db.get(Track, track_id)
+    track = db.get(Track, payload.get("track_id"))
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    position = db.query(JamQueueItem).filter(JamQueueItem.jam_id == jam.id).count()
-    item = JamQueueItem(jam_id=jam.id, track_id=track.id, position=position, added_by=user.id)
+    item = JamQueueItem(jam_id=jam.id, track_id=track.id, position=0, added_by=user.id)
     db.add(item)
+    db.flush()
+    items = [existing for existing in _queue_items(db, jam) if existing.id != item.id]
+    # "front" makes it the next track instead of the last one.
+    items.insert(0 if payload.get("front") else len(items), item)
+    _renumber(items)
     db.commit()
-    db.refresh(item)
-    notify(
-        manager.broadcast(
-            jam.code,
-            {"type": "queue_add", "item": {"id": item.id, "track": track_to_dict(track, user), "added_by": user.id}},
-        )
-    )
+    _broadcast_state(db, jam)
     return {"ok": True, "item_id": item.id}
+
+
+@router.post("/api/jams/{code}/queue/{item_id}/move")
+def move_queue_item(
+    code: str,
+    item_id: int,
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    jam = _get_jam(db, code)
+    _participant(db, jam, user)
+    step = {"up": -1, "down": 1}.get(payload.get("direction"))
+    if step is None:
+        raise HTTPException(status_code=400, detail="Direction must be up or down")
+    items = _queue_items(db, jam)
+    index = next((i for i, item in enumerate(items) if item.id == item_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="Queue item not found")
+    target = index + step
+    if 0 <= target < len(items):
+        items[index], items[target] = items[target], items[index]
+        _renumber(items)
+        db.commit()
+        _broadcast_state(db, jam)
+    return {"ok": True}
 
 
 @router.delete("/api/jams/{code}/queue/{item_id}")
@@ -222,9 +265,7 @@ def remove_from_queue(
         raise HTTPException(status_code=403, detail="Cannot remove this item")
     db.delete(item)
     db.commit()
-    notify(
-        manager.broadcast(jam.code, {"type": "queue_remove", "item_id": item_id})
-    )
+    _broadcast_state(db, jam)
     return {"ok": True}
 
 
@@ -257,16 +298,19 @@ def control_jam(
         jam.position = float(payload.get("position") or 0.0)
         jam.position_updated_at = now
     elif action == "next":
-        # Pick the first queued track and remove it.
-        first = db.scalar(
-            select(JamQueueItem)
-            .where(JamQueueItem.jam_id == jam.id)
-            .order_by(JamQueueItem.position, JamQueueItem.id)
-        )
-        if first:
-            jam.current_track_id = first.track_id
-            db.delete(first)
-        jam.is_playing = True
+        # Every client reports "ended", so only advance if it is still the track they heard.
+        expected = payload.get("expected_track_id")
+        if expected is not None and int(expected) != jam.current_track_id:
+            return {"ok": True}
+        items = _queue_items(db, jam)
+        if items:
+            jam.current_track_id = items[0].track_id
+            db.delete(items[0])
+            _renumber(items[1:])
+            jam.is_playing = True
+        else:
+            # Nothing queued: stop instead of replaying the same track for everyone.
+            jam.is_playing = False
         jam.position = 0.0
         jam.position_updated_at = now
     elif action == "stop_track":
@@ -278,17 +322,7 @@ def control_jam(
         raise HTTPException(status_code=400, detail="Unknown action")
     db.commit()
     db.refresh(jam)
-    track = db.get(Track, jam.current_track_id) if jam.current_track_id else None
-    host = db.get(User, jam.host_user_id)
-    message = {
-        "type": "control",
-        "action": action,
-        "by": user.id,
-        "current_track": track_to_dict(track, host) if track else None,
-        "is_playing": jam.is_playing,
-        "position": jam.position,
-    }
-    notify(manager.broadcast(jam.code, message))
+    _broadcast_state(db, jam)
     return {"ok": True}
 
 

@@ -20,6 +20,7 @@ from apps.api.core.security import (
 )
 from apps.api.routers import (
     auth,
+    devices,
     favorites,
     health,
     jams,
@@ -121,5 +122,6 @@ app.include_router(users.router)
 app.include_router(tracks.router)
 app.include_router(playlists.router)
 app.include_router(jams.router)
+app.include_router(devices.router)
 app.include_router(favorites.router)
 app.include_router(maintenance.router)

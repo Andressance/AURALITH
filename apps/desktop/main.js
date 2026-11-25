@@ -3,6 +3,20 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 
+// The window only shows a web page, so the GPU is not needed. On some Windows machines the
+// GPU process crashes at launch, which left the app with no visible window.
+app.disableHardwareAcceleration();
+
+// A second launch should focus the open window, not start a hidden copy.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+app.on("second-instance", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
+
 const settingsPath = path.join(app.getPath("userData"), "auralith-desktop.json");
 function loadSettings() {
   try {
@@ -47,7 +61,7 @@ function createWindow() {
     minWidth: 760,
     minHeight: 520,
     title: "Auralith",
-    icon: nativeImage.createFromPath(path.join(__dirname, "../../apps/web/public/icon.png")),
+    icon: nativeImage.createFromPath(path.join(__dirname, "assets", "icon.png")),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -67,6 +81,10 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { deny: true };
+  });
+  // If the renderer dies, reload instead of leaving an empty window behind.
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    if (details.reason !== "clean-exit" && mainWindow) mainWindow.reload();
   });
   mainWindow.on("closed", () => {
     mainWindow = null;

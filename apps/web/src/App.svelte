@@ -14,6 +14,24 @@
   let jamState = null;
   let jamSocket = null;
   let jamError = "";
+  let jamSearch = "";
+  let devices = [];
+  let devicesSocket = null;
+  let devicesRetry = null;
+  let remoteTargetId = null;
+  let showDevicesPanel = false;
+  let pendingLoad = null;
+  const deviceId = (() => {
+    try {
+      const stored = sessionStorage.getItem("auralith_device_id");
+      if (stored) return stored;
+      const created = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+      sessionStorage.setItem("auralith_device_id", created);
+      return created;
+    } catch {
+      return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    }
+  })();
   let playlistShares = [];
   let shareError = "";
   let favorites = [];
@@ -222,6 +240,7 @@
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
     if (profile.role === "owner") await loadOwnerUsers();
     resumeJam();
+    connectDevicesSocket();
   }
 
   async function loadOwnerUsers() {
@@ -526,6 +545,14 @@
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
+    clearTimeout(devicesRetry);
+    if (devicesSocket) {
+      devicesSocket.onclose = null;
+      devicesSocket.close();
+      devicesSocket = null;
+    }
+    devices = [];
+    remoteTargetId = null;
     sessionToken = "";
     localStorage.removeItem("auralith_session_token");
     authenticated = false;
@@ -697,25 +724,11 @@
         return;
       }
       if (message.type === "state") {
+        // The server sends the whole jam after every change, so the queue never drifts.
         jamState = message.state;
         applyJamPlayback(message.state);
-      } else if (message.type === "control") {
-        jamState = {
-          ...jamState,
-          current_track: message.current_track,
-          is_playing: message.is_playing,
-          position: message.position
-        };
-        applyJamPlayback(jamState);
       } else if (message.type === "participants") {
         jamState = { ...jamState, participants: message.participants };
-      } else if (message.type === "queue_add") {
-        jamState = { ...jamState, queue: [...(jamState?.queue || []), message.item] };
-      } else if (message.type === "queue_remove") {
-        jamState = {
-          ...jamState,
-          queue: (jamState?.queue || []).filter((item) => item.id !== message.item_id)
-        };
       } else if (message.type === "ended") {
         leaveJamLocal();
         jamError = "El anfitrión terminó el jam";
@@ -828,17 +841,38 @@
     }
   }
 
-  async function jamQueueTrack(track) {
+  async function jamQueueTrack(track, front = false) {
     if (!jamCode) return;
     try {
       await api(`/api/jams/${jamCode}/queue`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ track_id: track.id })
+        body: JSON.stringify({ track_id: track.id, front })
       });
     } catch (cause) {
       jamError = cause.message;
     }
+  }
+
+  async function jamMoveQueueItem(item, direction) {
+    if (!jamCode) return;
+    try {
+      await api(`/api/jams/${jamCode}/queue/${item.id}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction })
+      });
+    } catch (cause) {
+      jamError = cause.message;
+    }
+  }
+
+  function jamLibrary(query, library) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return library;
+    return library.filter((track) =>
+      [track.title, track.artist, track.album].some((value) => String(value || "").toLowerCase().includes(needle))
+    );
   }
 
   async function jamRemoveQueueItem(item) {
@@ -974,7 +1008,20 @@
     if (index >= 0) play(playbackQueue[index]);
   }
 
+  // Every play button goes through here, so a jam never plays something its members cannot hear.
+  function playTrack(track) {
+    if (jamCode) {
+      jamControl("play", { track_id: track.id, position: 0 });
+      return;
+    }
+    play(track);
+  }
+
   function playPrevious() {
+    if (jamCode) {
+      jamControl("seek", { position: 0 });
+      return;
+    }
     if (!playbackQueue.length) return;
     if (audio?.currentTime > 3) {
       audio.currentTime = 0;
@@ -989,9 +1036,17 @@
     shuffleMode = !shuffleMode;
   }
 
-  function enqueueTrack(track) {
-    if (playbackQueue.some((item) => item.id === track.id)) return;
-    playbackQueue = [...playbackQueue, track];
+  function enqueueTrack(track, front = false) {
+    if (jamCode) {
+      jamQueueTrack(track, front);
+      return;
+    }
+    if (!front && playbackQueue.some((item) => item.id === track.id)) return;
+    const others = playbackQueue.filter((item) => item.id !== track.id);
+    const currentIndex = others.findIndex((item) => item.id === currentTrack?.id);
+    if (front && currentIndex >= 0) others.splice(currentIndex + 1, 0, track);
+    else others.push(track);
+    playbackQueue = others;
     if (!currentTrack) play(track);
   }
 
@@ -1004,6 +1059,11 @@
   }
 
   function handleTrackEnded() {
+    if (jamCode) {
+      // Every member's player reports the end; the server advances only once.
+      jamControl("next", { expected_track_id: currentTrack?.id });
+      return;
+    }
     if (loopMode === "one") {
       if (audio) {
         audio.currentTime = 0;
@@ -1089,18 +1149,173 @@
       album: text(track.album, "Auralith"),
       artwork
     });
-    navigator.mediaSession.setActionHandler("play", () => {
-      audio?.play();
-    });
-    navigator.mediaSession.setActionHandler("pause", () => {
-      audio?.pause();
-    });
-    navigator.mediaSession.setActionHandler("seekto", (details) => {
-      if (audio && Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime;
-    });
-    navigator.mediaSession.setActionHandler("previoustrack", playPrevious);
-    navigator.mediaSession.setActionHandler("nexttrack", playNext);
+    syncMediaSession();
   }
+
+  // Windows reads playbackState and position from the Media Session to draw the taskbar
+  // controls of an installed PWA, so keep them in step with the audio element.
+  function syncMediaSession() {
+    if (!("mediaSession" in navigator)) return;
+    navigator.mediaSession.playbackState = audio && !audio.paused ? "playing" : "paused";
+    if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
+      try {
+        navigator.mediaSession.setPositionState({
+          duration: audio.duration,
+          playbackRate: audio.playbackRate || 1,
+          position: Math.min(audio.currentTime, audio.duration)
+        });
+      } catch {}
+    }
+  }
+
+  // Handlers are registered once, so the taskbar buttons keep working across track changes.
+  function setupMediaSession() {
+    if (!("mediaSession" in navigator)) return;
+    const actions = {
+      play: () => {
+        if (jamCode ? !jamState?.is_playing : audio?.paused) togglePlayback();
+      },
+      pause: () => {
+        if (jamCode ? jamState?.is_playing : !audio?.paused) togglePlayback();
+      },
+      previoustrack: playPrevious,
+      nexttrack: playNext,
+      seekto: (details) => {
+        if (audio && Number.isFinite(details.seekTime)) audio.currentTime = details.seekTime;
+      },
+      seekbackward: () => {
+        if (audio) audio.currentTime = Math.max(0, audio.currentTime - 10);
+      },
+      seekforward: () => {
+        if (audio) audio.currentTime = Math.min(duration || Infinity, audio.currentTime + 10);
+      }
+    };
+    for (const [action, handler] of Object.entries(actions)) {
+      try {
+        navigator.mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Some browsers do not support every action; the others still work.
+      }
+    }
+  }
+
+  // Devices: each signed-in tab reports what it plays and can receive commands from the others.
+  function describeDevice() {
+    const ua = navigator.userAgent;
+    const os = /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Mac OS/.test(ua) ? "Mac" : "Linux";
+    const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "Navegador";
+    const installed = window.matchMedia?.("(display-mode: standalone)").matches ? " · app" : "";
+    return `${os} · ${browser}${installed}`;
+  }
+
+  function connectDevicesSocket() {
+    clearTimeout(devicesRetry);
+    if (devicesSocket) {
+      devicesSocket.onclose = null;
+      devicesSocket.close();
+    }
+    const base = API_BASE || window.location.origin;
+    const socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws/devices`);
+    devicesSocket = socket;
+    socket.onopen = () => socket.send(JSON.stringify({ token: sessionToken, device_id: deviceId, name: describeDevice() }));
+    socket.onmessage = (event) => {
+      let message;
+      try {
+        message = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (message.type === "devices") {
+        devices = message.devices;
+        if (remoteTargetId && !devices.some((device) => device.device_id === remoteTargetId)) remoteTargetId = null;
+      } else if (message.type === "relay") {
+        handleRelay(message.from, message.message);
+      }
+    };
+    socket.onclose = () => {
+      if (devicesSocket !== socket) return;
+      devicesSocket = null;
+      devices = [];
+      remoteTargetId = null;
+      if (authenticated) devicesRetry = setTimeout(connectDevicesSocket, 4000);
+    };
+  }
+
+  function publishPresence() {
+    if (devicesSocket?.readyState !== WebSocket.OPEN) return;
+    devicesSocket.send(JSON.stringify({
+      type: "presence",
+      is_playing: Boolean(audio && !audio.paused),
+      position: audio?.currentTime || 0,
+      track: currentTrack
+        ? { id: currentTrack.id, title: currentTrack.title, artist: currentTrack.artist, cover_url: currentTrack.cover_url }
+        : null
+    }));
+  }
+
+  function sendRelay(target, message) {
+    if (devicesSocket?.readyState !== WebSocket.OPEN) return;
+    devicesSocket.send(JSON.stringify({ type: "relay", target, message }));
+  }
+
+  async function handleRelay(from, message) {
+    if (!message || typeof message !== "object") return;
+    switch (message.cmd) {
+      case "play":
+        if (audio?.paused && currentTrack) audio.play();
+        break;
+      case "pause":
+        audio?.pause();
+        break;
+      case "next":
+        playNext();
+        break;
+      case "prev":
+        playPrevious();
+        break;
+      case "seek":
+        if (audio) audio.currentTime = Number(message.position) || 0;
+        break;
+      case "handoff":
+        // The device that wants the music takes over: send it our track and stop here.
+        if (!currentTrack || !audio) break;
+        sendRelay(from, { cmd: "load", track: currentTrack, position: audio.currentTime, playing: !audio.paused });
+        audio.pause();
+        break;
+      case "load":
+        loadRemote(message);
+        break;
+    }
+  }
+
+  async function loadRemote(message) {
+    const track = message.track;
+    if (!track?.stream_url) return;
+    if (currentTrack?.id === track.id && audio) {
+      audio.currentTime = Number(message.position) || 0;
+      if (message.playing) audio.play();
+      else audio.pause();
+      return;
+    }
+    pendingLoad = message;
+    await play(track);
+  }
+
+  function controlDevice(action) {
+    if (remoteTargetId) sendRelay(remoteTargetId, { cmd: action });
+  }
+
+  function toggleRemoteTarget(device) {
+    remoteTargetId = remoteTargetId === device.device_id ? null : device.device_id;
+  }
+
+  function takeOverPlayback(device) {
+    // The playing device answers with its track; see the "handoff" case above.
+    sendRelay(device.device_id, { cmd: "handoff" });
+  }
+
+  setupMediaSession();
+  setInterval(publishPresence, 5000);
 
   load().catch(() => {});
 </script>
@@ -1165,7 +1380,8 @@
         <button class="nav-item" onclick={() => { navigateView("library"); searchQuery = ""; search(); }}>⌕ <span>Buscar</span></button>
         <button class="nav-item" class:active={activeView === "playlists"} onclick={() => navigateView("playlists")}>♫ <span>Playlists</span></button>
         <button class="nav-item" class:active={activeView === "profile"} onclick={() => navigateView("profile")}>● <span>Perfil</span></button>
-      <button class="nav-item" class:active={activeView === "jam"} onclick={() => navigateView("jam")}>◉ <span>Jam</span></button>
+        <button class="nav-item" class:active={activeView === "jam"} onclick={() => navigateView("jam")}>◉ <span>Jam</span></button>
+        <button class="nav-item" class:active={showDevicesPanel} onclick={() => showDevicesPanel = !showDevicesPanel}>◫ <span>Dispositivos</span></button>
       </nav>
       <div class="sidebar-library">
         <div class="sidebar-heading">
@@ -1288,15 +1504,15 @@
                 {/if}
               </div>
               <div class="jam-now-text">
-                <span>{jamState?.is_playing ? "Sonando ahora" : "En pausa"}</span>
-                <strong>{jamState?.current_track ? text(jamState.current_track.title, "Canción sin título") : "Nada sonando"}</strong>
-                <small>{jamState?.current_track ? text(jamState.current_track.artist, "Artista desconocido") : "Añade una canción a la cola"}</small>
+                <span>{jamState?.is_playing ? "Sonando ahora" : jamState?.current_track ? "En pausa" : "Nada sonando"}</span>
+                <strong>{jamState?.current_track ? text(jamState.current_track.title, "Canción sin título") : "Elige una canción"}</strong>
+                <small>{jamState?.current_track ? text(jamState.current_track.artist, "Artista desconocido") : "Pulsa ▶ en la biblioteca de abajo para empezar a sonar todos a la vez"}</small>
               </div>
               <div class="jam-controls">
-                <button onclick={() => jamControl(jamState?.is_playing ? "pause" : "play", { position: audio?.currentTime || 0 })} aria-label="Reproducir o pausar">
-                  {jamState?.is_playing ? "Ⅱ" : "▶"}
+                <button onclick={() => jamControl(jamState?.is_playing ? "pause" : "play", { position: audio?.currentTime || 0 })} disabled={!jamState?.current_track}>
+                  {jamState?.is_playing ? "Ⅱ Pausar" : "▶ Reproducir"}
                 </button>
-                <button onclick={() => jamControl("next")} aria-label="Siguiente">↦</button>
+                <button onclick={() => jamControl("next")} disabled={!jamState?.queue?.length}>⏭ Siguiente</button>
               </div>
             </div>
 
@@ -1308,25 +1524,35 @@
 
             <div class="jam-columns">
               <section class="jam-panel">
-                <h3>Cola del jam</h3>
-                {#each jamState?.queue || [] as item}
+                <h3>A continuación <small>{jamState?.queue?.length || 0}</small></h3>
+                <p class="jam-hint">La primera de la lista es la siguiente. Ordénalas con ↑ ↓.</p>
+                {#each jamState?.queue || [] as item, index (item.id)}
                   <div class="jam-row">
                     <span>{text(item.track.title, "Canción sin título")}<small>{text(item.track.artist, "Artista desconocido")}</small></span>
-                    <button onclick={() => jamRemoveQueueItem(item)} aria-label="Quitar de la cola">×</button>
+                    <div class="jam-row-actions">
+                      <button onclick={() => jamMoveQueueItem(item, "up")} disabled={index === 0} aria-label="Subir">↑</button>
+                      <button onclick={() => jamMoveQueueItem(item, "down")} disabled={index === jamState.queue.length - 1} aria-label="Bajar">↓</button>
+                      <button onclick={() => jamRemoveQueueItem(item)} aria-label="Quitar de la cola">Quitar</button>
+                    </div>
                   </div>
                 {:else}
-                  <p class="jam-empty">La cola está vacía.</p>
+                  <p class="jam-empty">Nada en cola. Cuando termine la canción, el jam pasará a la siguiente de aquí.</p>
                 {/each}
               </section>
               <section class="jam-panel">
-                <h3>Tu biblioteca</h3>
-                {#each tracks.slice(0, 12) as track}
+                <h3>Biblioteca</h3>
+                <input class="jam-search" type="search" bind:value={jamSearch} placeholder="Buscar canción o artista" aria-label="Buscar en tu biblioteca" />
+                {#each jamLibrary(jamSearch, tracks) as track (track.id)}
                   <div class="jam-row">
                     <span>{text(track.title, "Canción sin título")}<small>{text(track.artist, "Artista desconocido")}</small></span>
-                    <button onclick={() => jamQueueTrack(track)} aria-label={`Añadir ${text(track.title, "canción")} a la cola`}>＋</button>
+                    <div class="jam-row-actions">
+                      <button onclick={() => playTrack(track)} aria-label={`Reproducir ${text(track.title, "canción")} ahora`}>▶ Ahora</button>
+                      <button onclick={() => enqueueTrack(track, true)} aria-label={`Poner ${text(track.title, "canción")} la siguiente`}>⏭ Siguiente</button>
+                      <button onclick={() => enqueueTrack(track)} aria-label={`Añadir ${text(track.title, "canción")} al final`}>+ Cola</button>
+                    </div>
                   </div>
                 {:else}
-                  <p class="jam-empty">Sube música para añadirla.</p>
+                  <p class="jam-empty">{tracks.length ? "Ninguna canción coincide con la búsqueda." : "Sube música para añadirla."}</p>
                 {/each}
               </section>
             </div>
@@ -1610,8 +1836,9 @@
               ondragend={endTrackDrag}
             >
               <span class="track-index">{index + 1}</span>
-              <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
+              <button class="track-play" onclick={() => playTrack(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
               <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
+              <button class="row-action" onclick={() => enqueueTrack(track, true)} title="Reproducir después" aria-label="Reproducir después">⏭</button>
               <button class="row-action" onclick={() => enqueueTrack(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
               {#if selectedPlaylist.role !== "viewer"}
                 <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
@@ -1640,7 +1867,7 @@
                   aria-label={`Seleccionar ${text(track.title, "Canción")}`}
                 />
               </label>
-              <button class="cover" onclick={() => play(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
+              <button class="cover" onclick={() => playTrack(track)} aria-label={`Reproducir ${text(track.title, "Canción sin título")}`}>
                 {#if track.cover_url}
                   <img src={assetUrl(track.cover_url)} alt="" loading="lazy" decoding="async" onerror={hideBrokenImage} />
                 {:else}
@@ -1651,6 +1878,7 @@
               <strong>{text(track.title, "Canción sin título")}</strong>
               <span>{text(track.artist, "Artista desconocido")}</span>
               <div class="track-actions">
+                <button onclick={() => enqueueTrack(track, true)} aria-label="Reproducir después" title="Reproducir después">⏭</button>
                 <button onclick={() => enqueueTrack(track)} aria-label="Añadir a la cola" title="Añadir a la cola">↗</button>
                 <button onclick={() => openTrackPlaylistPicker(track.id)} aria-label="Añadir a playlist" title="Añadir a playlist">＋</button>
                 <button onclick={() => favorite(track)} aria-label="Favorito" title="Favorito">♥</button>
@@ -1697,10 +1925,19 @@
           autoplay
           preload="metadata"
           src={streamUrl(currentTrack)}
-          onplay={() => isPlaying = true}
-          onpause={() => isPlaying = false}
+          onplay={() => { isPlaying = true; syncMediaSession(); publishPresence(); }}
+          onpause={() => { isPlaying = false; syncMediaSession(); publishPresence(); }}
           ontimeupdate={(event) => progress = event.currentTarget.currentTime}
-          onloadedmetadata={(event) => duration = event.currentTarget.duration}
+          onloadedmetadata={(event) => {
+            const element = event.currentTarget;
+            duration = element.duration;
+            if (pendingLoad) {
+              element.currentTime = Number(pendingLoad.position) || 0;
+              if (!pendingLoad.playing) element.pause();
+              pendingLoad = null;
+            }
+            syncMediaSession();
+          }}
           onvolumechange={(event) => volume = event.currentTarget.volume}
           onended={handleTrackEnded}
           onerror={() => { isPlaying = false; error = "No se pudo reproducir la canción"; }}
@@ -1719,7 +1956,7 @@
         {/if}
         {#each playbackQueue.filter((track) => track.id !== currentTrack?.id) as track}
           <article>
-            <button onclick={() => play(track)}>
+            <button onclick={() => playTrack(track)}>
               <strong>{track.title}</strong>
               <span>{track.artist || "Artista desconocido"}</span>
             </button>
@@ -1731,6 +1968,47 @@
       </aside>
     {/if}
   </div>
+  {#if showDevicesPanel}
+    <aside class="queue-panel devices-panel" class:player-visible={playerVisible} aria-label="Dispositivos">
+      <div class="queue-heading">
+        <strong>Dispositivos</strong>
+        <span>{devices.length} conectado(s)</span>
+        <button onclick={() => showDevicesPanel = false} aria-label="Cerrar dispositivos">×</button>
+      </div>
+      <p>Mismo perfil, otros dispositivos. Elige cuál controlas o pásale la reproducción.</p>
+      {#if !devicesSocket}
+        <p>Conectando con tus dispositivos…</p>
+      {/if}
+      {#each devices as device (device.device_id)}
+        {@const self = device.device_id === deviceId}
+        <article class="device-card" class:controlling={remoteTargetId === device.device_id}>
+          <div class="device-info">
+            <strong>{device.name}{self ? " · este dispositivo" : ""}</strong>
+            <span>{device.track ? `${device.is_playing ? "Sonando" : "En pausa"}: ${device.track.title}` : "Sin reproducción"}</span>
+          </div>
+          {#if !self}
+            <div class="device-actions">
+              <button onclick={() => toggleRemoteTarget(device)}>{remoteTargetId === device.device_id ? "Dejar de controlar" : "Controlar"}</button>
+              {#if device.track}<button onclick={() => takeOverPlayback(device)}>Pasar aquí</button>{/if}
+            </div>
+          {/if}
+        </article>
+      {/each}
+      {#if devicesSocket && devices.length < 2}
+        <p class="jam-empty">Abre Auralith con esta cuenta en otro dispositivo y aparecerá aquí.</p>
+      {/if}
+      {#each devices.filter((device) => device.device_id === remoteTargetId) as target (target.device_id)}
+        <div class="device-remote">
+          <small>Controlando: {target.name}</small>
+          <div class="jam-controls">
+            <button onclick={() => controlDevice("prev")} aria-label="Anterior">⏮</button>
+            <button onclick={() => controlDevice(target.is_playing ? "pause" : "play")}>{target.is_playing ? "Ⅱ Pausar" : "▶ Reproducir"}</button>
+            <button onclick={() => controlDevice("next")} aria-label="Siguiente">⏭</button>
+          </div>
+        </div>
+      {/each}
+    </aside>
+  {/if}
   {#if selectedTrackIds.length}
     <section class="selection-bar" class:player-visible={playerVisible}>
       <strong>{selectedTrackIds.length} seleccionada(s)</strong>
