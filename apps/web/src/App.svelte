@@ -84,13 +84,27 @@
     activeView = viewFromPath();
   });
 
-  window.addEventListener("keydown", (event) => {
-    if (event.code === "Space" && !["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) {
-      if (currentTrack) {
-        event.preventDefault();
-        togglePlayback();
-      }
+  function focusedControlUsesSpace() {
+    const element = document.activeElement;
+    if (!element || element === document.body) return false;
+    if (element.isContentEditable) return true;
+    if (["TEXTAREA", "SELECT"].includes(element.tagName)) return true;
+    if (element.tagName === "INPUT") {
+      // Sliders do nothing with Space; text, checkbox and file inputs do.
+      return (element.getAttribute("type") || "text").toLowerCase() !== "range";
     }
+    return Boolean(
+      element.closest("button, a[href], [role='button'], [role='switch'], [role='checkbox'], [role='tab']")
+    );
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (event.code !== "Space" || event.repeat || event.defaultPrevented || !currentTrack) return;
+    // The focused play button activates itself on Space, so handling the key here as
+    // well toggled playback twice. Let any control that consumes Space keep it.
+    if (focusedControlUsesSpace()) return;
+    event.preventDefault();
+    togglePlayback();
   });
 
   function text(value, fallback = "") {
