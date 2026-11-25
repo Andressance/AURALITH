@@ -629,3 +629,69 @@ def test_media_urls_are_signed_and_query_tokens_are_rejected():
     assert anonymous.get(stream_url).status_code == 200
     assert anonymous.get(stream_url.replace("sig=", "sig=0")).status_code == 401
     assert anonymous.get(f"/api/tracks/{track_id}/stream?token=anything").status_code == 401
+
+
+def test_playlist_sharing_is_explicit_and_revocable():
+    login()
+    invitation = client.post("/api/owner/invitations", json={"display_name": "Sharee"})
+    code = invitation.json()["code"]
+    assert client.post(
+        f"/api/invitations/{code}/activate",
+        json={
+            "username": "sharee",
+            "display_name": "Sharee",
+            "password": "GuestPassword123!",
+        },
+    ).status_code == 200
+    guest_client = TestClient(app)
+    assert guest_client.post(
+        "/api/auth/login",
+        json={"username": "sharee", "password": "GuestPassword123!"},
+    ).status_code == 200
+
+    playlist = client.post("/api/playlists", json={"name": "Shared mix"}).json()
+
+    # Nothing is visible until it is shared explicitly.
+    assert guest_client.get(f"/api/playlists/{playlist['id']}").status_code == 404
+    assert guest_client.get(f"/api/playlists/{playlist['id']}/cover").status_code == 404
+
+    assert client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "nobody"}
+    ).status_code == 404
+    assert client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "owner"}
+    ).status_code == 400
+
+    shared = client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "sharee"}
+    )
+    assert shared.status_code == 200
+
+    detail = guest_client.get(f"/api/playlists/{playlist['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["shared"] is True
+    assert detail.json()["owner"]
+    assert any(
+        item["id"] == playlist["id"] and item["shared"] is True
+        for item in guest_client.get("/api/playlists").json()
+    )
+
+    # A shared playlist is read-only and its shares belong to the owner.
+    assert guest_client.get(f"/api/playlists/{playlist['id']}/shares").status_code == 404
+    assert guest_client.post(
+        f"/api/playlists/{playlist['id']}/shares", json={"username": "owner"}
+    ).status_code == 404
+    assert guest_client.delete(f"/api/playlists/{playlist['id']}").status_code == 404
+
+    shares = client.get(f"/api/playlists/{playlist['id']}/shares")
+    assert shares.status_code == 200
+    assert [item["username"] for item in shares.json()] == ["sharee"]
+
+    assert client.delete(
+        f"/api/playlists/{playlist['id']}/shares/{shared.json()['user_id']}"
+    ).status_code == 200
+    assert guest_client.get(f"/api/playlists/{playlist['id']}").status_code == 404
+    assert all(
+        item["id"] != playlist["id"]
+        for item in guest_client.get("/api/playlists").json()
+    )

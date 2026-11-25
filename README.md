@@ -61,7 +61,7 @@ The backend is not coupled to Supabase or to a local installation:
 - ZIP backup and SQLite restore
 - Docker Compose deployment
 
-This describes the working core of the first MVP, not completion of every feature in the broader V1 acceptance checklist below.
+This is the complete V1 feature set. V1.5 (local friends) and V2 (federation) are not implemented.
 
 ### Neon database and storage
 
@@ -997,7 +997,9 @@ Después de importar una playlist, se mostrará:
 
 # 17. Compartición
 
-En V1 se implementará una compartición controlada dentro de la instancia.
+En V1 la compartición es explícita y revocable dentro de la instancia, y no depende de la amistad: el propietario de una playlist concede acceso por nombre de usuario y puede quitarlo en cualquier momento. Quien la recibe puede verla y reproducirla, pero no editarla ni gestionar accesos.
+
+En la práctica el catálogo de audio ya es común a toda la instancia, así que la compartición controla la visibilidad de la playlist, no el acceso a las canciones. Los niveles separados `VIEW` / `PLAY` solo tendrían sentido con bibliotecas privadas por usuario, que pertenecen a V1.5.
 
 La amistad no será necesaria para compartir recursos.
 

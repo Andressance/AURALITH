@@ -1681,3 +1681,44 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Playlist sharing ------------------------------------------------------- */
+.share-playlist {
+  margin-top: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  padding: 8px 15px;
+  background: rgba(181, 138, 255, 0.12);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.share-playlist:hover { background: rgba(181, 138, 255, 0.2); border-color: var(--brand-400); }
+
+.share-panel { display: grid; gap: 10px; }
+.share-panel form { grid-template-columns: minmax(0, 1fr) auto; }
+.share-hint { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.45; }
+.share-list { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; }
+.share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.share-row span { display: grid; min-width: 0; font-weight: 650; }
+.share-row small { color: var(--ink-dim); font-weight: 500; }
+.share-row button {
+  border: 0;
+  border-radius: var(--radius-pill);
+  padding: 6px 11px;
+  background: var(--surface-3);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+.share-row button:hover { background: var(--danger-bg); color: var(--danger-soft); }
+.share-empty { margin: 0; color: var(--ink-dim); font-size: 12px; }

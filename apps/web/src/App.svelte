@@ -6,6 +6,10 @@
   let password = "";
   let tracks = [];
   let playlists = [];
+  let sharePanelPlaylistId = null;
+  let shareUsername = "";
+  let playlistShares = [];
+  let shareError = "";
   let favorites = [];
   let playlistName = "";
   let error = "";
@@ -593,6 +597,53 @@
     }
   }
 
+  async function openSharePanel() {
+    if (!selectedPlaylist?.id) return;
+    sharePanelPlaylistId = selectedPlaylist.id;
+    shareUsername = "";
+    shareError = "";
+    try {
+      playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
+    } catch (cause) {
+      shareError = cause.message;
+      playlistShares = [];
+    }
+  }
+
+  function closeSharePanel() {
+    sharePanelPlaylistId = null;
+    shareUsername = "";
+    shareError = "";
+    playlistShares = [];
+  }
+
+  async function sharePlaylist(event) {
+    event.preventDefault();
+    if (!sharePanelPlaylistId) return;
+    shareError = "";
+    try {
+      await api(`/api/playlists/${sharePanelPlaylistId}/shares`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: shareUsername.trim() })
+      });
+      shareUsername = "";
+      playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
+    } catch (cause) {
+      shareError = cause.message;
+    }
+  }
+
+  async function unsharePlaylist(accountId) {
+    if (!sharePanelPlaylistId) return;
+    try {
+      await api(`/api/playlists/${sharePanelPlaylistId}/shares/${accountId}`, { method: "DELETE" });
+      playlistShares = await api(`/api/playlists/${sharePanelPlaylistId}/shares`);
+    } catch (cause) {
+      shareError = cause.message;
+    }
+  }
+
   async function downloadBackup() {
     try {
       // A relative URL would hit the web origin, not the API, and a new tab cannot
@@ -917,7 +968,7 @@
               {:else}
                 <span class="playlist-cover">♫</span>
               {/if}
-              <span><strong>{playlist.name}</strong><small>Playlist</small></span>
+              <span><strong>{playlist.name}</strong><small>{playlist.shared ? `De ${playlist.owner}` : "Playlist"}</small></span>
             </button>
             <button
               class="playlist-play"
@@ -1150,7 +1201,7 @@
                   <span>♫</span>
                 {/if}
                 <strong>{playlist.name}</strong>
-                <small>Playlist</small>
+                <small>{playlist.shared ? `De ${playlist.owner}` : "Playlist"}</small>
                 </button>
                 <button
                   class="playlist-card-play"
@@ -1209,12 +1260,17 @@
             {:else}
               ♫
             {/if}
-            <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadPlaylistCover} /></label>
+            {#if !selectedPlaylist.shared}
+              <label title="Cambiar foto">✎<input type="file" accept="image/jpeg,image/png,image/webp" onchange={uploadPlaylistCover} /></label>
+            {/if}
           </div>
           <div>
-            <span>Playlist</span>
+            <span>{selectedPlaylist.shared ? "Compartida contigo" : "Playlist"}</span>
             <h2>{selectedPlaylist.name}</h2>
-            <p>Auralith · {selectedPlaylist.tracks.length} canciones</p>
+            <p>{selectedPlaylist.shared ? `De ${selectedPlaylist.owner}` : "Auralith"} · {selectedPlaylist.tracks.length} canciones</p>
+            {#if !selectedPlaylist.shared}
+              <button class="share-playlist" onclick={openSharePanel}>Compartir</button>
+            {/if}
           </div>
         </section>
         <section class="track-list playlist-tracks">
@@ -1229,7 +1285,9 @@
               <button class="track-play" onclick={() => play(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
               <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
               <button class="row-action" onclick={() => enqueueTrack(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
-              <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
+              {#if !selectedPlaylist.shared}
+                <button class="row-action" onclick={() => removeFromPlaylist(track)} title="Quitar">×</button>
+              {/if}
             </article>
           {/each}
         </section>
@@ -1373,6 +1431,30 @@
           <strong>{playlist.name}</strong>
         </button>
       {/each}
+    </div>
+  {/if}
+  {#if sharePanelPlaylistId && selectedPlaylist}
+    <div class="upload-playlist-picker share-panel" role="dialog" aria-modal="true" aria-label="Compartir playlist">
+      <div class="sheet-heading">
+        <strong>Compartir “{selectedPlaylist.name}”</strong>
+        <button onclick={closeSharePanel}>×</button>
+      </div>
+      <p class="share-hint">Quien tenga acceso puede ver y reproducir la playlist, pero no editarla ni gestionar sus accesos.</p>
+      <form onsubmit={sharePlaylist}>
+        <input bind:value={shareUsername} placeholder="Usuario" maxlength="63" />
+        <button type="submit">Dar acceso</button>
+      </form>
+      {#if shareError}<p class="error">{shareError}</p>{/if}
+      <div class="share-list">
+        {#each playlistShares as share}
+          <div class="share-row">
+            <span>{share.display_name || share.username}<small>@{share.username}</small></span>
+            <button onclick={() => unsharePlaylist(share.user_id)} aria-label={`Quitar acceso a ${share.username}`}>Quitar</button>
+          </div>
+        {:else}
+          <p class="share-empty">Todavía no compartiste esta playlist.</p>
+        {/each}
+      </div>
     </div>
   {/if}
   {#if showUploadPlaylistPicker}

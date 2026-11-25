@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from apps.api.core.playlist_import import (
@@ -21,25 +21,70 @@ from apps.api.media import (
     upload_profile_image,
     versioned_image_url,
 )
-from apps.api.models import HiddenTrack, Playlist, PlaylistTrack, Track, User
+from apps.api.models import HiddenTrack, Playlist, PlaylistShare, PlaylistTrack, Track, User
 from apps.api.serializers import track_to_dict
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/api/playlists")
-def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
-    playlists = db.scalars(select(Playlist).where(Playlist.user_id == user.id).order_by(Playlist.id))
-    return [{
-        "id": p.id,
-        "name": p.name,
+
+def playlist_summary(playlist: Playlist, user: User, owner: str, shared: bool) -> dict:
+    return {
+        "id": playlist.id,
+        "name": playlist.name,
         "cover_url": versioned_image_url(
-            f"/api/playlists/{p.id}/cover",
-            Path(p.cover_path).stem if getattr(p, "cover_path", None) else None,
+            f"/api/playlists/{playlist.id}/cover",
+            Path(playlist.cover_path).stem if getattr(playlist, "cover_path", None) else None,
             user,
         ),
-    } for p in playlists]
+        "owner": owner,
+        "shared": shared,
+    }
+
+
+def playable_playlist(db: Session, user: User, playlist_id: int):
+    """Return (playlist, is_owner) when the user may read it, else None."""
+    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id))
+    if not playlist:
+        return None
+    if playlist.user_id == user.id:
+        return playlist, True
+    share = db.scalar(
+        select(PlaylistShare).where(
+            PlaylistShare.playlist_id == playlist_id,
+            PlaylistShare.user_id == user.id,
+        )
+    )
+    return (playlist, False) if share else None
+
+
+def owned_playlist(db: Session, user: User, playlist_id: int) -> Playlist:
+    playlist = db.scalar(
+        select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id)
+    )
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    return playlist
+
+
+@router.get("/api/playlists")
+def list_playlists(db: Annotated[Session, Depends(db_session)], user: Annotated[User, Depends(current_user)]):
+    own = db.scalars(select(Playlist).where(Playlist.user_id == user.id).order_by(Playlist.id))
+    owner_name = user.display_name or user.username
+    items = [playlist_summary(p, user, owner_name, False) for p in own]
+    shared = db.execute(
+        select(Playlist, User)
+        .join(PlaylistShare, PlaylistShare.playlist_id == Playlist.id)
+        .join(User, User.id == Playlist.user_id)
+        .where(PlaylistShare.user_id == user.id)
+        .order_by(Playlist.id)
+    ).all()
+    items.extend(
+        playlist_summary(playlist, user, account.display_name or account.username, True)
+        for playlist, account in shared
+    )
+    return items
 
 @router.post("/api/playlists/import/csv")
 async def import_playlist_csv(
@@ -137,9 +182,12 @@ def get_playlist(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
+    access = playable_playlist(db, user, playlist_id)
+    if not access:
         raise HTTPException(status_code=404, detail="Playlist not found")
+    playlist, is_owner = access
+    owner = user if is_owner else db.scalar(select(User).where(User.id == playlist.user_id))
+    owner_name = (owner.display_name or owner.username) if owner else "Auralith"
     entries = db.scalars(
         select(PlaylistTrack)
         .where(PlaylistTrack.playlist_id == playlist_id)
@@ -156,6 +204,8 @@ def get_playlist(
             "id": playlist.id,
             "name": playlist.name,
             "cover_url": cover_url,
+            "owner": owner_name,
+            "shared": not is_owner,
             "tracks": [],
         }
     hidden_ids = select(HiddenTrack.track_id).where(HiddenTrack.user_id == user.id)
@@ -170,6 +220,8 @@ def get_playlist(
         "id": playlist.id,
         "name": playlist.name,
         "cover_url": cover_url,
+        "owner": owner_name,
+        "shared": not is_owner,
         "tracks": [track_to_dict(tracks_by_id[track_id], user) for track_id in track_ids if track_id in tracks_by_id],
     }
 
@@ -180,9 +232,7 @@ async def update_playlist_cover(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    playlist = owned_playlist(db, user, playlist_id)
     previous_path = playlist.cover_path
     path, content_type = await upload_profile_image(file, f"playlist-covers/{playlist.id}")
     playlist.cover_path = path
@@ -203,9 +253,10 @@ async def playlist_cover(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(media_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
+    access = playable_playlist(db, user, playlist_id)
+    if not access:
         raise HTTPException(status_code=404, detail="Playlist not found")
+    playlist, _ = access
 
     def save_path(path: str) -> None:
         playlist.cover_path = path
@@ -226,10 +277,9 @@ def delete_playlist(
     db: Annotated[Session, Depends(db_session)],
     user: Annotated[User, Depends(current_user)],
 ):
-    playlist = db.scalar(select(Playlist).where(Playlist.id == playlist_id, Playlist.user_id == user.id))
-    if not playlist:
-        raise HTTPException(status_code=404, detail="Playlist not found")
+    playlist = owned_playlist(db, user, playlist_id)
     db.query(PlaylistTrack).filter(PlaylistTrack.playlist_id == playlist_id).delete()
+    db.query(PlaylistShare).filter(PlaylistShare.playlist_id == playlist_id).delete()
     db.delete(playlist)
     db.commit()
     return {"ok": True}
@@ -317,4 +367,77 @@ def remove_playlist_track(
     if entry:
         db.delete(entry)
         db.commit()
+    return {"ok": True}
+
+
+@router.get("/api/playlists/{playlist_id}/shares")
+def list_playlist_shares(
+    playlist_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    owned_playlist(db, user, playlist_id)
+    rows = db.execute(
+        select(PlaylistShare, User)
+        .join(User, User.id == PlaylistShare.user_id)
+        .where(PlaylistShare.playlist_id == playlist_id)
+        .order_by(PlaylistShare.id)
+    ).all()
+    return [
+        {
+            "user_id": share.user_id,
+            "username": account.username,
+            "display_name": account.display_name,
+        }
+        for share, account in rows
+    ]
+
+
+@router.post("/api/playlists/{playlist_id}/shares")
+def share_playlist(
+    playlist_id: int,
+    payload: dict,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    owned_playlist(db, user, playlist_id)
+    username = re.sub(r"[\x00-\x1f\x7f]", "", str(payload.get("username", ""))).strip()[:63]
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    account = db.scalar(
+        select(User).where(func.lower(User.username) == username.lower())
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.id == user.id:
+        raise HTTPException(status_code=400, detail="You already own this playlist")
+    existing = db.scalar(
+        select(PlaylistShare).where(
+            PlaylistShare.playlist_id == playlist_id,
+            PlaylistShare.user_id == account.id,
+        )
+    )
+    if not existing:
+        db.add(PlaylistShare(playlist_id=playlist_id, user_id=account.id))
+        db.commit()
+    return {
+        "user_id": account.id,
+        "username": account.username,
+        "display_name": account.display_name,
+    }
+
+
+@router.delete("/api/playlists/{playlist_id}/shares/{account_id}")
+def revoke_playlist_share(
+    playlist_id: int,
+    account_id: int,
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    owned_playlist(db, user, playlist_id)
+    db.query(PlaylistShare).filter(
+        PlaylistShare.playlist_id == playlist_id,
+        PlaylistShare.user_id == account_id,
+    ).delete()
+    db.commit()
     return {"ok": True}
