@@ -834,8 +834,12 @@
   {#if inviteCode}
     <main class="login-shell">
       <form onsubmit={activateInvite}>
-        <h1>Unirse a Auralith</h1>
-        <p>Crea tu cuenta personal.</p>
+        <div class="login-brand">
+          <img src="/auralith-logo.svg" alt="Auralith" />
+          <img class="login-wave" src="/auralith-wave.svg" alt="" aria-hidden="true" />
+        </div>
+        <h1>Crea tu cuenta</h1>
+        <p>Te han invitado a una biblioteca privada.</p>
         <label>
           Nombre visible
           <input bind:value={inviteDisplayName} maxlength="100" autocomplete="name" />
@@ -855,18 +859,22 @@
   {:else}
     <main class="login-shell">
       <form onsubmit={(event) => login(event)}>
-        <h1>Auralith</h1>
-        <p>Your private music cloud.</p>
+        <div class="login-brand">
+          <img src="/auralith-logo.svg" alt="Auralith" />
+          <img class="login-wave" src="/auralith-wave.svg" alt="" aria-hidden="true" />
+        </div>
+        <h1>Bienvenido de nuevo</h1>
+        <p>Tu música. Tu servidor. Tus reglas.</p>
         <label>
-          Username
+          Usuario
           <input bind:value={username} autocomplete="username" />
         </label>
         <label>
-          Password
+          Contraseña
           <input type="password" bind:value={password} autocomplete="current-password" />
         </label>
         {#if error}<p class="error">{error}</p>{/if}
-        <button type="submit">Sign in</button>
+        <button type="submit">Entrar</button>
       </form>
     </main>
   {/if}
