@@ -4,6 +4,33 @@ All notable changes to Auralith are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Devices: signed-in browsers of one account see each other. Only one device plays at a
+  time, and a device can control another one or take over its playback.
+- Media Session controls (play, pause, previous, next, seek) with playback state and
+  position, so Windows shows them for an installed app.
+- Browser test of the jam flow in `tests/e2e`, skipped unless its environment is set.
+
+### Changed
+
+- Jams broadcast the full state after every change, so the queue never drifts.
+- Play buttons inside a jam set the jam's track for every member.
+- The jam library lists the whole collection with search; tracks can be queued as next
+  and the queue can be reordered.
+- A track that ends advances the jam once, not once per member.
+
+### Fixed
+
+- Uploads failed on Windows: mutagen could not reopen the temporary file.
+- Uploads of files without ID3 tags lost their duration.
+- Library action buttons overlapped the selection checkbox.
+- The desktop app opened no window on some machines: GPU acceleration is off, a second
+  launch focuses the open window, and a crashed renderer reloads.
+- The desktop app now uses its own icon in the window, the executable and the installer.
+
 ## [1.2.0] — 2026-11-25
 
 ### Added

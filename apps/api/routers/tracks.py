@@ -2,8 +2,8 @@
 
 import hashlib
 import logging
+import os
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Annotated
@@ -71,17 +71,23 @@ async def upload_track(
         ) from error
     try:
         with storage.open(stored_key) as source:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as probe:
-                shutil.copyfileobj(source, probe)
-                probe.flush()
-                tags = MutagenFile(probe.name, easy=True)
-                info = tags.info if tags else None
-                duration = int(getattr(info, "length", 0) or 0)
-                metadata = tags.tags if tags and tags.tags else {}
-                cover = None
-                raw_tags = MutagenFile(probe.name)
-                if raw_tags:
-                    cover = extract_cover(raw_tags)
+            audio_bytes = source.read()
+        # Mutagen needs a named file here (BytesIO returns no easy tags), and Windows cannot
+        # reopen a NamedTemporaryFile while it is still open, so write, close, then parse.
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as probe:
+            probe.write(audio_bytes)
+        try:
+            # "is not None": a file without ID3 tags is falsy in mutagen but still has a duration.
+            tags = MutagenFile(probe.name, easy=True)
+            info = tags.info if tags is not None else None
+            duration = int(getattr(info, "length", 0) or 0)
+            metadata = tags.tags if tags is not None and tags.tags else {}
+            cover = None
+            raw_tags = MutagenFile(probe.name)
+            if raw_tags is not None:
+                cover = extract_cover(raw_tags)
+        finally:
+            os.unlink(probe.name)
 
         def first(key: str):
             value = metadata.get(key)
@@ -112,6 +118,7 @@ async def upload_track(
                     break
         isrc = normalize_isrc(str(isrc_value)) if isrc_value else None
     except Exception:
+        logger.exception("Could not read uploaded audio %s", stored_key)
         storage.delete(stored_key)
         raise HTTPException(status_code=400, detail="Invalid or unreadable audio file")
     cover_path = None

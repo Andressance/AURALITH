@@ -952,7 +952,8 @@ button { cursor: pointer; }
 .track-grid article:hover .cover b, .track-grid article.playing .cover b { opacity: 1; transform: translateY(0); }
 .track-grid article > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .track-grid article > span { color: var(--ink-muted); font-size: 13px; }
-.track-actions { position: absolute; right: 10px; top: 10px; display: flex; opacity: 0; }
+/* In the card's flow, not over the cover: four buttons overlapped the selection checkbox. */
+.track-actions { display: flex; flex-wrap: wrap; gap: 4px; opacity: 0; }
 .track-grid article:hover .track-actions { opacity: 1; }
 .track-actions button { border: 0; border-radius: 50%; width: 28px; height: 28px; background: rgba(18,18,18,.85); color: #fff; }
 .queue-panel {
@@ -1954,3 +1955,14 @@ body {
 }
 .device-remote { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .device-remote small { color: var(--ink-soft); font-size: 12px; }
+/* Jam transport buttons carry text now, so they are pills instead of 38px circles. */
+.jam-controls button {
+  width: auto;
+  height: auto;
+  min-width: 38px;
+  padding: 9px 14px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+}
