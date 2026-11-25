@@ -10,20 +10,27 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# Two build contexts are supported: the repository root (apps/ plus pyproject.toml) and
+# the API directory itself (requirements.txt). Both are laid out as /app/apps/api, so the
+# application imports the same way everywhere. `set -e` makes a missing file fail the
+# build instead of producing an image that breaks on start.
 COPY . /tmp/build-context
-RUN if [ -f /tmp/build-context/pyproject.toml ]; then \
+RUN set -eu; \
+    if [ -f /tmp/build-context/pyproject.toml ]; then \
       cp /tmp/build-context/pyproject.toml /app/pyproject.toml; \
       cp -R /tmp/build-context/apps /app/apps; \
       cp /tmp/build-context/alembic.ini /app/alembic.ini; \
       pip install --no-cache-dir /app; \
     elif [ -f /tmp/build-context/requirements.txt ]; then \
-      cp -R /tmp/build-context/. /app/; \
-      pip install --no-cache-dir -r /app/requirements.txt; \
+      mkdir -p /app/apps/api; \
+      cp -R /tmp/build-context/. /app/apps/api/; \
+      pip install --no-cache-dir -r /app/apps/api/requirements.txt; \
     else \
-      cp -R /tmp/build-context/. /app/; \
-      pip install --no-cache-dir fastapi uvicorn sqlalchemy psycopg[binary] python-multipart mutagen argon2-cffi pyjwt; \
-    fi
+      echo "ERROR: the build context needs pyproject.toml or requirements.txt" >&2; \
+      exit 1; \
+    fi; \
+    test -f /app/apps/api/app.py
 
 EXPOSE 8000
 
-CMD ["/bin/sh", "-c", "cd /app && if [ -f apps/api/migrations/run.py ]; then python apps/api/migrations/run.py; elif [ -f migrations/run.py ]; then python migrations/run.py; else echo ERROR-no-migration-runner-in-image; exit 1; fi && if [ -f apps/api/app.py ]; then uvicorn apps.api.app:app --host 0.0.0.0 --port ${PORT:-8000}; else uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}; fi"]
+CMD ["/bin/sh", "-c", "cd /app && python apps/api/migrations/run.py && uvicorn apps.api.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

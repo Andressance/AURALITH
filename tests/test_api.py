@@ -30,7 +30,10 @@ migration_config.set_main_option("script_location", str(PROJECT_ROOT / "apps" / 
 command.upgrade(migration_config, "head")
 
 from fastapi.testclient import TestClient
-from apps.api.app import app, Playlist, Track, SessionLocal, storage, normalize_utc, optimize_image
+from apps.api.app import app
+from apps.api.media import optimize_image
+from apps.api.models import Playlist, Track, normalize_utc
+from apps.api.runtime import SessionLocal, storage
 
 client = TestClient(app)
 
@@ -111,7 +114,7 @@ def test_range_stream_and_owner_isolation():
     key = "test-range.mp3"
     storage.upload(key, b"0123456789abcdef", "audio/mpeg")
     with SessionLocal() as db:
-        from apps.api.app import User
+        from apps.api.models import User
         owner = db.query(User).filter(User.username == "owner").first()
         track = Track(
             user_id=owner.id,
@@ -146,7 +149,7 @@ def test_search_and_playlist_track_operations():
     key = "test-search.mp3"
     storage.upload(key, b"search-track", "audio/mpeg")
     with SessionLocal() as db:
-        from apps.api.app import User
+        from apps.api.models import User
         owner = db.query(User).filter(User.username == "owner").first()
         track = Track(
             user_id=owner.id,
@@ -207,7 +210,7 @@ def test_guest_sees_owner_tracks_but_can_only_hide_them():
     login()
     key = "shared-track.mp3"
     storage.upload(key, b"shared-track", "audio/mpeg")
-    from apps.api.app import User
+    from apps.api.models import User
     with SessionLocal() as db:
         owner = db.query(User).filter(User.username == "owner").first()
         track = Track(
@@ -356,7 +359,7 @@ def test_cross_origin_upload_error_has_cors_headers():
 
 def test_csv_import_matches_tracks_and_adds_only_exact_matches():
     login()
-    from apps.api.app import User
+    from apps.api.models import User
 
     with SessionLocal() as db:
         owner = db.query(User).filter(User.username == "owner").first()
@@ -455,7 +458,7 @@ def test_image_responses_allow_private_browser_caching():
     cover_key = "cache-test-cover.webp"
     storage.upload(cover_key, playlist_cover.content, "image/webp")
     with SessionLocal() as db:
-        from apps.api.app import User
+        from apps.api.models import User
         owner = db.query(User).filter(User.username == "owner").first()
         track = Track(
             user_id=owner.id,
@@ -553,7 +556,7 @@ def test_owner_backup_contains_database_and_music():
 
 def test_search_escapes_sql_wildcards():
     login()
-    from apps.api.app import User
+    from apps.api.models import User
 
     with SessionLocal() as db:
         owner = db.query(User).filter(User.username == "owner").first()
@@ -593,7 +596,7 @@ def test_media_urls_are_signed_and_query_tokens_are_rejected():
     login()
     key = "signed-media-test.mp3"
     storage.upload(key, b"abcdef", "audio/mpeg")
-    from apps.api.app import User
+    from apps.api.models import User
 
     with SessionLocal() as db:
         owner = db.query(User).filter(User.username == "owner").first()

@@ -35,14 +35,10 @@ for candidate in _import_roots(HERE.parent):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-try:
-    from apps.api.infrastructure.database.sqlalchemy_provider import (
-        SQLAlchemyDatabaseProvider,
-    )
-    from apps.api.models import Base
-except ModuleNotFoundError:
-    from infrastructure.database.sqlalchemy_provider import SQLAlchemyDatabaseProvider
-    from models import Base
+from apps.api.infrastructure.database.sqlalchemy_provider import (  # noqa: E402
+    SQLAlchemyDatabaseProvider,
+)
+from apps.api.models import Base  # noqa: E402
 
 config = context.config
 target_metadata = Base.metadata
