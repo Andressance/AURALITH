@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from mutagen import File as MutagenFile
 from PIL import Image, ImageOps
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError, TimeoutError as DatabaseTimeoutError
@@ -208,6 +209,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    # The backup download reads the server-chosen file name from this header.
+    expose_headers=["Content-Disposition"],
 )
 request_rate_limiter = SlidingWindowRateLimiter()
 
@@ -1482,20 +1485,29 @@ def remove_favorite(track_id: int, db: Annotated[Session, Depends(db_session)], 
 @app.get("/api/backup")
 def create_backup(user: Annotated[User, Depends(current_user)]):
     require_owner(user)
-    if storage_provider_name != "local":
-        raise HTTPException(status_code=400, detail="Backup is currently available only for local storage")
+    sqlite_path = database.sqlite_path
+    # A ZIP without the database is not a backup, so refuse instead of returning a
+    # partial archive that would look like one.
+    if storage_provider_name != "local" or sqlite_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Backup requires local storage and a SQLite database",
+        )
     backup_path = BASE_DIR / f"auralith-backup-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
     with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        if DATABASE_URL.startswith("sqlite"):
-            sqlite_path = DATABASE_URL.removeprefix("sqlite:///")
-            if not sqlite_path.startswith("/"):
-                sqlite_path = str(Path.cwd() / sqlite_path)
-            archive.write(sqlite_path, "auralith.db")
-        archive.write(STORAGE_DIR, "music") if False else None
+        archive.write(sqlite_path, "auralith.db")
         for path in STORAGE_DIR.rglob("*"):
             if path.is_file():
-                archive.write(path, Path("music") / path.relative_to(STORAGE_DIR))
-    return FileResponse(backup_path, media_type="application/zip", filename=backup_path.name)
+                # POSIX member names keep Windows-made archives restorable.
+                relative = path.relative_to(STORAGE_DIR).as_posix()
+                archive.write(path, f"music/{relative}")
+    # Remove the archive once it has been sent: it is a full copy of the library.
+    return FileResponse(
+        backup_path,
+        media_type="application/zip",
+        filename=backup_path.name,
+        background=BackgroundTask(backup_path.unlink, missing_ok=True),
+    )
 
 
 @app.post("/api/restore")
@@ -1526,9 +1538,7 @@ async def restore_backup(
                 normalized = Path(member.replace("\\", "/"))
                 if normalized.is_absolute() or ".." in normalized.parts:
                     raise HTTPException(status_code=400, detail="Invalid backup: unsafe path")
-            sqlite_path = Path(DATABASE_URL.removeprefix("sqlite:///"))
-            if not sqlite_path.is_absolute():
-                sqlite_path = Path.cwd() / sqlite_path
+            sqlite_path = database.sqlite_path
             sqlite_path.parent.mkdir(parents=True, exist_ok=True)
             with archive.open("auralith.db") as source, sqlite_path.open("wb") as target:
                 shutil.copyfileobj(source, target)

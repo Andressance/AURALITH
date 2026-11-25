@@ -1,5 +1,6 @@
 import os
 import tempfile
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timezone
@@ -533,6 +534,21 @@ def test_backup_and_restore_require_owner():
     )
     assert restore_response.status_code == 403
     assert restore_response.json()["detail"] == "Owner access required"
+
+
+def test_owner_backup_contains_database_and_music():
+    login()
+    storage.upload("backup-test.mp3", b"backup-audio", "audio/mpeg")
+
+    response = client.get("/api/backup")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "attachment" in response.headers["content-disposition"]
+    with zipfile.ZipFile(BytesIO(response.content)) as archive:
+        names = archive.namelist()
+        assert archive.read("music/backup-test.mp3") == b"backup-audio"
+    assert "auralith.db" in names
 
 
 def test_search_escapes_sql_wildcards():

@@ -579,8 +579,29 @@
     }
   }
 
-  function downloadBackup() {
-    window.open("/api/backup", "_blank");
+  async function downloadBackup() {
+    try {
+      // A relative URL would hit the web origin, not the API, and a new tab cannot
+      // carry the bearer token, so fetch the archive and save it as a blob.
+      const headers = new Headers();
+      if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
+      const response = await fetch(`${API_BASE}/api/backup`, { headers, credentials: "include" });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "No se pudo crear la copia de seguridad");
+      }
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filename = /filename="?([^";]+)"?/.exec(disposition)?.[1] || "auralith-backup.zip";
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      error = "";
+    } catch (cause) {
+      error = cause.message;
+    }
   }
 
   async function restoreBackup(event) {
@@ -976,15 +997,17 @@
               <p>Gestiona tu sesión y las copias locales de la biblioteca.</p>
             </div>
             <div class="profile-action-grid">
-              <button type="button" onclick={downloadBackup}>
-                <span>↧</span>
-                <strong>Copia de seguridad</strong>
-              </button>
-              <label>
-                <span>↥</span>
-                <strong>Restaurar</strong>
-                <input type="file" accept=".zip" onchange={restoreBackup} />
-              </label>
+              {#if profile?.role === "owner"}
+                <button type="button" onclick={downloadBackup}>
+                  <span>↧</span>
+                  <strong>Copia de seguridad</strong>
+                </button>
+                <label>
+                  <span>↥</span>
+                  <strong>Restaurar</strong>
+                  <input type="file" accept=".zip" onchange={restoreBackup} />
+                </label>
+              {/if}
               <button type="button" class="danger" onclick={logout}>
                 <span>⏻</span>
                 <strong>Cerrar sesión</strong>
