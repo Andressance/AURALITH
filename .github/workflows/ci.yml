@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install -e ".[test]"
+      - name: Lint
+        run: python -m pyflakes apps/api tests
+      - name: Test
+        run: python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Both layouts are supported and both have broken a deploy before.
+      - name: Build from the repository root
+        run: docker build -f apps/api/Dockerfile .
+      - name: Build from the API directory
+        run: docker build -f apps/api/Dockerfile apps/api

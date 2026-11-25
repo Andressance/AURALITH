@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.3", "httpx>=0.28"]
+test = ["pytest>=8.3", "httpx>=0.28", "pyflakes>=3.2"]
 
 [build-system]
 requires = ["setuptools>=75"]

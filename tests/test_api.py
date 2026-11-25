@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import tempfile
 import zipfile
 from io import BytesIO
@@ -551,7 +552,13 @@ def test_owner_backup_contains_database_and_music():
     with zipfile.ZipFile(BytesIO(response.content)) as archive:
         names = archive.namelist()
         assert archive.read("music/backup-test.mp3") == b"backup-audio"
+        database_bytes = archive.read("auralith.db")
     assert "auralith.db" in names
+    # The snapshot must be a readable SQLite database, not a half-written file copy.
+    with sqlite3.connect(":memory:") as restored:
+        restored.deserialize(database_bytes)
+        tables = {row[0] for row in restored.execute("select name from sqlite_master where type='table'")}
+    assert {"users", "tracks", "playlists"} <= tables
 
 
 def test_search_escapes_sql_wildcards():

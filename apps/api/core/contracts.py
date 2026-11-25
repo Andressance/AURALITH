@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from typing import BinaryIO, Protocol
 

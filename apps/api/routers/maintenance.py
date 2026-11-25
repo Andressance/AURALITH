@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+import sqlite3
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -10,13 +11,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
-from apps.api.deps import current_user, require_owner
+from apps.api.deps import current_user, db_session, require_owner
 from apps.api.models import User
 from apps.api.runtime import (
     BASE_DIR,
-    DATABASE_URL,
     STORAGE_DIR,
     database,
     engine,
@@ -39,13 +40,27 @@ def create_backup(user: Annotated[User, Depends(current_user)]):
             detail="Backup requires local storage and a SQLite database",
         )
     backup_path = BASE_DIR / f"auralith-backup-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
-    with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(sqlite_path, "auralith.db")
-        for path in STORAGE_DIR.rglob("*"):
-            if path.is_file():
-                # POSIX member names keep Windows-made archives restorable.
-                relative = path.relative_to(STORAGE_DIR).as_posix()
-                archive.write(path, f"music/{relative}")
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+        snapshot_path = Path(handle.name)
+    try:
+        # Copy through SQLite's backup API instead of the raw file: a plain file copy
+        # can catch a half-written page and produce an archive that will not open.
+        source = sqlite3.connect(sqlite_path)
+        snapshot = sqlite3.connect(snapshot_path)
+        try:
+            source.backup(snapshot)
+        finally:
+            snapshot.close()
+            source.close()
+        with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(snapshot_path, "auralith.db")
+            for path in STORAGE_DIR.rglob("*"):
+                if path.is_file():
+                    # POSIX member names keep Windows-made archives restorable.
+                    relative = path.relative_to(STORAGE_DIR).as_posix()
+                    archive.write(path, f"music/{relative}")
+    finally:
+        snapshot_path.unlink(missing_ok=True)
     # Remove the archive once it has been sent: it is a full copy of the library.
     return FileResponse(
         backup_path,
@@ -58,12 +73,15 @@ def create_backup(user: Annotated[User, Depends(current_user)]):
 async def restore_backup(
     file: UploadFile,
     user: Annotated[User, Depends(current_user)],
+    db: Annotated[Session, Depends(db_session)],
 ):
     require_owner(user)
-    if storage_provider_name != "local":
-        raise HTTPException(status_code=400, detail="Restore is currently available only for local storage")
-    if not DATABASE_URL.startswith("sqlite"):
-        raise HTTPException(status_code=400, detail="Restore is currently available only for SQLite deployments")
+    sqlite_path = database.sqlite_path
+    if storage_provider_name != "local" or sqlite_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Restore requires local storage and a SQLite database",
+        )
     if not (file.filename or "").lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Backup must be a ZIP file")
     content = await file.read(1024 * 1024 * 1024)
@@ -82,8 +100,11 @@ async def restore_backup(
                 normalized = Path(member.replace("\\", "/"))
                 if normalized.is_absolute() or ".." in normalized.parts:
                     raise HTTPException(status_code=400, detail="Invalid backup: unsafe path")
-            sqlite_path = database.sqlite_path
             sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+            # Release every pooled connection before replacing the file: SQLite keeps
+            # using the old inode otherwise, and Windows cannot replace an open file.
+            db.close()
+            engine.dispose()
             with archive.open("auralith.db") as source, sqlite_path.open("wb") as target:
                 shutil.copyfileobj(source, target)
             shutil.rmtree(STORAGE_DIR)
