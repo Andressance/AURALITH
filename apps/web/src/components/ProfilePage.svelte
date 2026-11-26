@@ -12,8 +12,12 @@
   export let onNavigate;
   export let onSave;
   export let onUploadAvatar;
+  export let historyStatus;
+  export let historyBusy;
   export let onDownloadBackup;
   export let onRestoreBackup;
+  export let onExportHistory;
+  export let onDeleteHistory;
   export let onLogout;
   export let onCreateInvitation;
   export let onCopyInvitation;
@@ -85,6 +89,25 @@
         <span>⏻</span>
         <strong>Cerrar sesión</strong>
       </button>
+    </div>
+  </section>
+  <section class="profile-account-actions">
+    <div>
+      <span>Historial de escucha</span>
+      <p>Alimenta tus estadísticas y el Wrapped. Puedes descargarlo en CSV o borrar las escuchas antiguas.</p>
+    </div>
+    <div class="history-actions">
+      <button type="button" onclick={onExportHistory} disabled={historyBusy}>
+        ↧ Exportar historial en CSV
+      </button>
+      <div class="history-delete">
+        <button type="button" onclick={() => onDeleteHistory(90)} disabled={historyBusy}>Borrar +90 días</button>
+        <button type="button" onclick={() => onDeleteHistory(365)} disabled={historyBusy}>Borrar +1 año</button>
+        <button type="button" class="danger" onclick={() => onDeleteHistory(0)} disabled={historyBusy}>Borrar todo</button>
+      </div>
+      {#if historyStatus}
+        <p class="history-status" role="status">{historyStatus}</p>
+      {/if}
     </div>
   </section>
   {#if profile?.role === "owner"}

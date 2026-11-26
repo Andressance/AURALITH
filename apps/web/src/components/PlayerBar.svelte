@@ -10,6 +10,7 @@
   export let progress;
   export let duration;
   export let volume;
+  export let onOpenNowPlaying;
   export let onToggleShuffle;
   export let onPrevious;
   export let onTogglePlayback;
@@ -23,14 +24,17 @@
 <!-- The <audio> element stays owned by App.svelte (playback, Media Session and devices use it) and is slotted in here. -->
 <footer class="player">
   <div class="now-playing">
-    <div class="mini-cover">
-      {#if currentTrack.cover_url}
-        <img src={assetUrl(currentTrack.cover_url)} alt="" onerror={hideBrokenImage} />
-      {:else}
-        ♫
-      {/if}
-    </div>
-    <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
+    <button class="now-playing-open" onclick={onOpenNowPlaying} aria-label="Abrir reproductor a pantalla completa" title="Abrir reproductor">
+      <div class="mini-cover">
+        {#if currentTrack.cover_url}
+          <img src={assetUrl(currentTrack.cover_url)} alt="" onerror={hideBrokenImage} />
+        {:else}
+          ♫
+        {/if}
+      </div>
+      <div><strong>{text(currentTrack.title, "Canción sin título")}</strong><span>{text(currentTrack.artist, "Artista desconocido")}</span></div>
+    </button>
+    <button class="now-playing-expand" onclick={onOpenNowPlaying} aria-label="Abrir reproductor" title="Abrir reproductor">⌃</button>
   </div>
   <div class="player-center">
     <div class="player-controls">

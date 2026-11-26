@@ -4,6 +4,42 @@ All notable changes to Auralith are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Full-screen now-playing view in the style of a streaming app: large artwork, scrubable
+  progress with elapsed and remaining time, transport controls, favorites, volume and a
+  shortcut to the artist. It opens from the mini player and closes by pulling it down.
+- Grouped search: artists, albums and songs in one result page, with instant filtering of
+  the library instead of a flat track list.
+- Artist page built from library metadata: popular songs by local play count, albums that
+  expand into their track list, and every song of the artist.
+- Listening statistics per account: each playback session is stored with its listened
+  seconds and date, so minutes are real playback time and not the length of the file.
+- "Wrapped": a yearly summary with total minutes, top artists and their minutes, most
+  played song and albums, and a month-by-month chart, reachable from the sidebar and at
+  `/wrapped`.
+- Editable statistics dashboard at `/stats`: period switch (year, month, all time),
+  totals, and widgets that can be added, renamed, reordered and removed. Chart types are
+  bars, columns, donut, ranked list and a big number, over hours of the day, weekdays,
+  months, artists, songs, albums and genres, by minutes or plays.
+- `GET /api/stats/overview` exposes those breakdowns; the dashboard layout is stored per
+  account in `stats_dashboards` and defaults are restored with one click.
+- The listening history can be exported as CSV and trimmed from the profile page: older
+  than 90 days, older than a year, or everything. `GET /api/stats/plays/export` and
+  `DELETE /api/stats/plays` back those buttons.
+
+### Fixed
+
+- Selecting a playlist while a search was active kept showing the search results; the
+  playlist now opens and the search is cleared.
+
+### Notes
+
+- Listening statistics start with the first playback after this release; past plays are
+  not reconstructed.
+
 ## [1.3.0] — 2026-11-25
 
 ### Added

@@ -31,6 +31,8 @@
     <button class="nav-item" class:active={activeView === "library"} onclick={onHome}>⌂ <span>Inicio</span></button>
     <button class="nav-item" onclick={onSearch}>⌕ <span>Buscar</span></button>
     <button class="nav-item" class:active={activeView === "playlists"} onclick={() => onNavigate("playlists")}>♫ <span>Playlists</span></button>
+    <button class="nav-item" class:active={activeView === "wrapped"} onclick={() => onNavigate("wrapped")}>✦ <span>Wrapped</span></button>
+    <button class="nav-item" class:active={activeView === "stats"} onclick={() => onNavigate("stats")}>▦ <span>Estadísticas</span></button>
     <button class="nav-item" class:active={activeView === "profile"} onclick={() => onNavigate("profile")}>● <span>Perfil</span></button>
     <button class="nav-item" class:active={activeView === "jam"} onclick={() => onNavigate("jam")}>◉ <span>Jam</span></button>
     <button class="nav-item" class:active={showDevicesPanel} onclick={onToggleDevices}>◫ <span>Dispositivos</span></button>

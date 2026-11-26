@@ -2,12 +2,13 @@
   export let playbackQueue;
   export let currentTrack;
   export let playerVisible;
+  export let raised = false;
   export let onClose;
   export let onPlayTrack;
   export let onRemove;
 </script>
 
-<aside class="queue-panel" class:player-visible={playerVisible} aria-label="Cola de reproducción">
+<aside class="queue-panel" class:player-visible={playerVisible} class:raised aria-label="Cola de reproducción">
   <div class="queue-heading">
     <strong>Cola de reproducción</strong>
     <span>{playbackQueue.length} canciones</span>
