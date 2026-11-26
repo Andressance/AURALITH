@@ -13,8 +13,10 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase
@@ -128,6 +130,35 @@ class JamQueueItem(Base):
     position = Column(Integer, nullable=False, default=0)
     added_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     added_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ListeningPlay(Base):
+    __tablename__ = "listening_plays"
+    __table_args__ = (
+        Index("ix_listening_plays_user_played", "user_id", "played_at"),
+    )
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
+    seconds = Column(Integer, nullable=False, default=0)
+    played_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+
+
+class StatsDashboard(Base):
+    __tablename__ = "stats_dashboards"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    layout = Column(Text, nullable=False, default="[]")
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
 
 
 class Favorite(Base):

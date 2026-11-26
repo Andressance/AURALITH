@@ -24,7 +24,15 @@ from apps.api.media import (
     iter_storage,
     optimize_image_with_limit,
 )
-from apps.api.models import Favorite, HiddenTrack, Playlist, PlaylistTrack, Track, User
+from apps.api.models import (
+    Favorite,
+    HiddenTrack,
+    ListeningPlay,
+    Playlist,
+    PlaylistTrack,
+    Track,
+    User,
+)
 from apps.api.runtime import storage
 from apps.api.serializers import track_to_dict
 
@@ -309,6 +317,8 @@ def delete_track(
     storage.delete(track.stored_path)
     db.query(PlaylistTrack).filter(PlaylistTrack.track_id == track_id).delete()
     db.query(Favorite).filter(Favorite.track_id == track_id).delete()
+    # Listening history rows point at the track, so they go with it.
+    db.query(ListeningPlay).filter(ListeningPlay.track_id == track_id).delete()
     db.delete(track)
     db.commit()
     return {"ok": True}

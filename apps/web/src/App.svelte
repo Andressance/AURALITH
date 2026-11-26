@@ -1,21 +1,27 @@
 <script>
   import { tick } from "svelte";
   import { API_BASE, assetUrl, text } from "./lib/format.js";
+  import { artistKeyForName, artistName, buildArtistIndex, searchLibrary } from "./lib/library.js";
+  import ArtistPage from "./components/ArtistPage.svelte";
+  import DashboardPage from "./components/DashboardPage.svelte";
   import DevicesPanel from "./components/DevicesPanel.svelte";
   import JamPage from "./components/JamPage.svelte";
   import LoginView from "./components/LoginView.svelte";
+  import NowPlayingView from "./components/NowPlayingView.svelte";
   import PlayerBar from "./components/PlayerBar.svelte";
   import PlaylistPicker from "./components/PlaylistPicker.svelte";
   import PlaylistsPage from "./components/PlaylistsPage.svelte";
   import PlaylistView from "./components/PlaylistView.svelte";
   import ProfilePage from "./components/ProfilePage.svelte";
   import QueuePanel from "./components/QueuePanel.svelte";
+  import SearchResults from "./components/SearchResults.svelte";
   import SelectionBar from "./components/SelectionBar.svelte";
   import SharePanel from "./components/SharePanel.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TrackGrid from "./components/TrackGrid.svelte";
   import UploadPanel from "./components/UploadPanel.svelte";
   import UploadPlaylistPicker from "./components/UploadPlaylistPicker.svelte";
+  import WrappedPage from "./components/WrappedPage.svelte";
 
   let authenticated = false;
   let username = "owner";
@@ -102,15 +108,61 @@
   let invitePassword = "";
   let inviteDisplayName = "";
 
+  $: artistIndex = buildArtistIndex(tracks);
+  $: selectedArtist = artistIndex.find((artist) => artist.key === selectedArtistKey) || null;
+  $: searchResults = searchQuery.trim()
+    ? searchLibrary(tracks, searchQuery, artistIndex)
+    : { artists: [], albums: [], tracks: [] };
+
   function viewFromPath() {
     const path = window.location.pathname;
     if (path.startsWith("/profile")) return "profile";
     if (path.startsWith("/playlists")) return "playlists";
+    if (path.startsWith("/artist/")) return "artist";
+    if (path.startsWith("/wrapped")) return "wrapped";
+    if (path.startsWith("/stats")) return "stats";
     if (path.startsWith("/jam")) return "jam";
     return "library";
   }
 
+  function artistKeyFromPath() {
+    if (!window.location.pathname.startsWith("/artist/")) return null;
+    const raw = window.location.pathname.slice("/artist/".length);
+    try {
+      return artistKeyForName(decodeURIComponent(raw));
+    } catch {
+      return artistKeyForName(raw);
+    }
+  }
+
   let activeView = viewFromPath();
+  let selectedArtistKey = artistKeyFromPath();
+  let selectedArtistAlbum = null;
+  let selectedArtist = null;
+  let artistIndex = [];
+  let searchResults = { artists: [], albums: [], tracks: [] };
+  let searchInput;
+  let mainPanel;
+  let nowPlayingOpen = false;
+  let playCounts = loadPlayCounts();
+  let wrapped = null;
+  let wrappedYears = [];
+  let wrappedYear = new Date().getFullYear();
+  let wrappedLoading = false;
+  let wrappedError = "";
+  let statsOverview = null;
+  let statsPeriod = "year";
+  let statsLoading = false;
+  let statsError = "";
+  let dashboardWidgets = [];
+  let dashboardSaving = false;
+  let wrappedRequestId = 0;
+  let statsRequestId = 0;
+  let dashboardSaveId = 0;
+  let dashboardSaveChain = Promise.resolve();
+  let listenedTrack = null;
+  let listenedSeconds = 0;
+  let listenedAt = 0;
 
   function navigateView(view) {
     const path = view === "library" ? "/" : `/${view}`;
@@ -122,10 +174,14 @@
       selectedPlaylistId = null;
       selectedPlaylist = null;
     }
+    if (view === "wrapped") loadWrapped(wrappedYear);
+    if (view === "stats") loadStats(statsPeriod);
   }
 
   window.addEventListener("popstate", () => {
     activeView = viewFromPath();
+    selectedArtistKey = artistKeyFromPath();
+    nowPlayingOpen = false;
   });
 
   function focusedControlUsesSpace() {
@@ -235,6 +291,8 @@
     authenticated = true;
     await Promise.all([loadTracks(), loadPlaylists(), loadFavorites()]);
     if (profile.role === "owner") await loadOwnerUsers();
+    if (activeView === "wrapped") await loadWrapped(wrappedYear);
+    if (activeView === "stats") await loadStats(statsPeriod);
     resumeJam();
     connectDevicesSocket();
   }
@@ -247,14 +305,6 @@
   async function loadTracks() {
     tracks = await api("/api/tracks");
     visibleTracks = tracks;
-  }
-
-  async function search() {
-    if (!searchQuery.trim()) {
-      visibleTracks = tracks;
-      return;
-    }
-    visibleTracks = await api(`/api/search?q=${encodeURIComponent(searchQuery)}`);
   }
 
   async function loadPlaylists() {
@@ -413,6 +463,8 @@
 
   async function selectPlaylist(playlist) {
     navigateView("library");
+    // Opening a playlist leaves the search behind, so the results cannot hide it.
+    searchQuery = "";
     selectedPlaylistId = playlist.id;
     if (!selectedPlaylist || selectedPlaylist.id !== playlist.id) {
       selectedPlaylist = {
@@ -540,6 +592,12 @@
   }
 
   async function logout() {
+    // Send the last listening session before the session token stops working,
+    // but never keep the user waiting on a dead connection.
+    await Promise.race([
+      flushListening(),
+      new Promise((resolve) => setTimeout(resolve, 2000))
+    ]);
     await api("/api/auth/logout", { method: "POST" });
     clearTimeout(devicesRetry);
     if (devicesSocket) {
@@ -926,6 +984,7 @@
       error = "No se pudo reproducir la canción";
       return;
     }
+    if (currentTrack?.id !== track.id) flushListening();
     if (!playbackQueue.some((item) => item.id === track.id)) {
       playbackQueue = selectedPlaylist?.tracks?.length
         ? selectedPlaylist.tracks
@@ -946,6 +1005,7 @@
     playerVisible = true;
     progress = 0;
     duration = 0;
+    recordPlay(track);
     updateMediaSession(track);
     await tick();
     if (audio) {
@@ -1047,6 +1107,7 @@
   }
 
   function handleTrackEnded() {
+    flushListening();
     if (jamCode) {
       // Every member's player reports the end; the server advances only once.
       jamControl("next", { expected_track_id: currentTrack?.id });
@@ -1299,13 +1360,177 @@
   // State changes that child components ask for through callbacks.
   function goHome() {
     navigateView("library");
+    searchQuery = "";
+    selectedPlaylistId = null;
+    selectedPlaylist = null;
     visibleTracks = tracks;
   }
 
-  function goSearch() {
+  async function goSearch() {
     navigateView("library");
-    searchQuery = "";
-    search();
+    await tick();
+    searchInput?.focus();
+  }
+
+  function openArtist(name, album = null) {
+    const resolved = typeof name === "string" && name.trim() ? name.trim() : "Artista desconocido";
+    history.pushState({ view: "artist" }, "", `/artist/${encodeURIComponent(resolved)}`);
+    selectedArtistKey = artistKeyForName(resolved);
+    selectedArtistAlbum = album;
+    activeView = "artist";
+    nowPlayingOpen = false;
+    if (mainPanel) mainPanel.scrollTop = 0;
+  }
+
+  function playCollection(collection) {
+    const playable = (collection || []).filter((track) => track?.stream_url);
+    if (!playable.length) return;
+    playbackQueue = playable;
+    play(playable[0]);
+  }
+
+  function loadPlayCounts() {
+    try {
+      return JSON.parse(localStorage.getItem("auralith_play_counts") || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function recordPlay(track) {
+    if (!track?.id) return;
+    playCounts = { ...playCounts, [track.id]: (playCounts[track.id] || 0) + 1 };
+    try {
+      localStorage.setItem("auralith_play_counts", JSON.stringify(playCounts));
+    } catch {}
+  }
+
+  async function toggleCurrentFavorite() {
+    if (!currentTrack) return;
+    const isFavorite = favorites.some((item) => item.id === currentTrack.id);
+    try {
+      await (isFavorite ? unfavorite(currentTrack) : favorite(currentTrack));
+    } catch (cause) {
+      error = cause.message;
+    }
+  }
+
+  async function loadWrapped(year) {
+    const request = ++wrappedRequestId;
+    wrappedLoading = true;
+    wrappedError = "";
+    try {
+      const years = await api("/api/stats/years");
+      const result = await api(`/api/stats/wrapped?year=${encodeURIComponent(year)}`);
+      // Changing the year quickly can make an older response arrive last.
+      if (request !== wrappedRequestId) return;
+      wrappedYears = years;
+      wrapped = result;
+      wrappedYear = result.year;
+    } catch (cause) {
+      if (request === wrappedRequestId) wrappedError = cause.message;
+    } finally {
+      if (request === wrappedRequestId) wrappedLoading = false;
+    }
+  }
+
+  async function loadStats(period = statsPeriod) {
+    const request = ++statsRequestId;
+    statsLoading = true;
+    statsError = "";
+    try {
+      const [overview, layout] = await Promise.all([
+        api(`/api/stats/overview?period=${encodeURIComponent(period)}`),
+        api("/api/stats/dashboard")
+      ]);
+      if (request !== statsRequestId) return;
+      statsOverview = overview;
+      statsPeriod = period;
+      dashboardWidgets = layout.widgets || [];
+    } catch (cause) {
+      if (request === statsRequestId) statsError = cause.message;
+    } finally {
+      if (request === statsRequestId) statsLoading = false;
+    }
+  }
+
+  // Layout writes are chained so two quick edits cannot reach the server out of
+  // order and leave the older design stored. Only the newest answer is applied.
+  function saveDashboardWidgets(widgets) {
+    const request = ++dashboardSaveId;
+    dashboardWidgets = widgets;
+    dashboardSaving = true;
+    statsError = "";
+    dashboardSaveChain = dashboardSaveChain.then(async () => {
+      try {
+        const saved = await api("/api/stats/dashboard", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ widgets })
+        });
+        if (request === dashboardSaveId) dashboardWidgets = saved.widgets || widgets;
+      } catch (cause) {
+        if (request !== dashboardSaveId) return;
+        statsError = cause.message;
+        // Do not leave edits on screen that the server rejected.
+        await loadStats(statsPeriod);
+      } finally {
+        if (request === dashboardSaveId) dashboardSaving = false;
+      }
+    });
+    return dashboardSaveChain;
+  }
+
+  function resetDashboard() {
+    const request = ++dashboardSaveId;
+    dashboardSaving = true;
+    statsError = "";
+    dashboardSaveChain = dashboardSaveChain.then(async () => {
+      try {
+        const saved = await api("/api/stats/dashboard/reset", { method: "POST" });
+        if (request === dashboardSaveId) dashboardWidgets = saved.widgets || [];
+      } catch (cause) {
+        if (request === dashboardSaveId) statsError = cause.message;
+      } finally {
+        if (request === dashboardSaveId) dashboardSaving = false;
+      }
+    });
+    return dashboardSaveChain;
+  }
+
+  // Listening time is measured from the media element, so seeks and buffering do not
+  // count as minutes. One report is sent per track session.
+  function trackListening(element) {
+    if (!currentTrack || element.paused) return;
+    if (!listenedTrack || listenedTrack.id !== currentTrack.id) {
+      flushListening();
+      listenedTrack = currentTrack;
+      listenedSeconds = 0;
+      listenedAt = element.currentTime;
+      return;
+    }
+    const delta = element.currentTime - listenedAt;
+    listenedAt = element.currentTime;
+    if (delta > 0 && delta <= 5) listenedSeconds += delta;
+  }
+
+  function flushListening({ keepalive = false } = {}) {
+    const track = listenedTrack;
+    const seconds = Math.round(listenedSeconds);
+    listenedTrack = null;
+    listenedSeconds = 0;
+    listenedAt = 0;
+    // Very short previews are noise, and the API rejects them anyway.
+    if (!track || seconds < 5) return Promise.resolve();
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
+    return fetch(`${API_BASE}/api/stats/plays`, {
+      method: "POST",
+      headers,
+      credentials: "include",
+      keepalive,
+      body: JSON.stringify({ track_id: track.id, seconds })
+    }).catch(() => {});
   }
 
   function closeUploadPlaylistPicker() {
@@ -1315,6 +1540,12 @@
 
   setupMediaSession();
   setInterval(publishPresence, 5000);
+
+  // Keep the last partial session when the tab is hidden or closed.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushListening({ keepalive: true });
+  });
+  window.addEventListener("pagehide", () => flushListening({ keepalive: true }));
 
   load().catch(() => {});
 </script>
@@ -1357,6 +1588,7 @@
 
     <main
       class="main-panel"
+      bind:this={mainPanel}
       ontouchstart={pullTouchStart}
       ontouchmove={pullTouchMove}
       ontouchend={pullTouchEnd}
@@ -1436,16 +1668,30 @@
         <header class="topbar">
           <label class="search-box">
             <span aria-hidden="true">⌕</span>
-            <input class="search" bind:value={searchQuery} oninput={search} placeholder="¿Qué quieres reproducir?" />
+            <input class="search" bind:this={searchInput} bind:value={searchQuery} placeholder="¿Qué quieres reproducir?" />
           </label>
+          {#if searchQuery.trim()}
+            <button class="search-clear" onclick={() => searchQuery = ""} aria-label="Limpiar búsqueda" title="Limpiar búsqueda">×</button>
+          {/if}
         </header>
       {/if}
 
-      {#if activeView === "library" && selectedPlaylist}
+      {#if activeView === "library" && searchQuery.trim()}
+        <SearchResults
+          results={searchResults}
+          {currentTrack}
+          {isPlaying}
+          onPlayTrack={playTrack}
+          onPlayCollection={playCollection}
+          onEnqueue={enqueueTrack}
+          onOpenArtist={openArtist}
+        />
+      {:else if activeView === "library" && selectedPlaylist}
         <PlaylistView
           {selectedPlaylist}
           {currentTrack}
           {isPlaying}
+          onOpenArtist={openArtist}
           onUploadCover={uploadPlaylistCover}
           onShare={openSharePanel}
           onToggleLibrary={togglePlaylistLibrary}
@@ -1471,7 +1717,51 @@
           onToggleSelection={toggleTrackSelection}
           onDragStart={startTrackDrag}
           onDragEnd={endTrackDrag}
+          onOpenArtist={openArtist}
         />
+      {:else if activeView === "stats"}
+        <DashboardPage
+          overview={statsOverview}
+          widgets={dashboardWidgets}
+          period={statsPeriod}
+          loading={statsLoading || (!statsOverview && !statsError)}
+          error={statsError}
+          saving={dashboardSaving}
+          onChangePeriod={loadStats}
+          onSaveWidgets={saveDashboardWidgets}
+          onResetWidgets={resetDashboard}
+          onOpenArtist={openArtist}
+        />
+      {:else if activeView === "wrapped"}
+        <WrappedPage
+          {wrapped}
+          years={wrappedYears}
+          year={wrappedYear}
+          loading={wrappedLoading || (!wrapped && !wrappedError)}
+          error={wrappedError}
+          onChangeYear={loadWrapped}
+          onOpenArtist={openArtist}
+        />
+      {:else if activeView === "artist"}
+        {#if selectedArtist}
+          <ArtistPage
+            artist={selectedArtist}
+            {currentTrack}
+            {isPlaying}
+            {playCounts}
+            initialAlbum={selectedArtistAlbum}
+            onBack={() => navigateView("library")}
+            onPlayTrack={playTrack}
+            onPlayCollection={playCollection}
+            onEnqueue={enqueueTrack}
+          />
+        {:else if tracks.length}
+          <section class="empty-state">
+            <h2>Artista no encontrado</h2>
+            <p>Ese artista ya no tiene canciones en esta biblioteca.</p>
+            <button onclick={() => navigateView("library")}>Volver a la biblioteca</button>
+          </section>
+        {/if}
       {/if}
     </main>
 
@@ -1494,6 +1784,7 @@
         onCycleLoop={cycleLoopMode}
         onSeek={seek}
         onVolume={changeVolume}
+        onOpenNowPlaying={() => nowPlayingOpen = true}
       >
         <audio
           bind:this={audio}
@@ -1502,7 +1793,10 @@
           src={streamUrl(currentTrack)}
           onplay={() => { isPlaying = true; syncMediaSession(); publishPresence(); }}
           onpause={() => { isPlaying = false; syncMediaSession(); publishPresence(); }}
-          ontimeupdate={(event) => progress = event.currentTarget.currentTime}
+          ontimeupdate={(event) => {
+            progress = event.currentTarget.currentTime;
+            trackListening(event.currentTarget);
+          }}
           onloadedmetadata={(event) => {
             const element = event.currentTarget;
             duration = element.duration;
@@ -1519,11 +1813,36 @@
         ></audio>
       </PlayerBar>
     {/if}
+    {#if nowPlayingOpen && currentTrack}
+      <NowPlayingView
+        {currentTrack}
+        {isPlaying}
+        {progress}
+        {duration}
+        {volume}
+        {shuffleMode}
+        {loopMode}
+        favorite={favorites.some((item) => item.id === currentTrack.id)}
+        queueLength={playbackQueue.length}
+        onClose={() => nowPlayingOpen = false}
+        onTogglePlayback={togglePlayback}
+        onPrevious={playPrevious}
+        onNext={playNext}
+        onToggleShuffle={toggleShuffle}
+        onCycleLoop={cycleLoopMode}
+        onSeek={seek}
+        onVolume={changeVolume}
+        onToggleQueue={() => showQueuePanel = !showQueuePanel}
+        onToggleFavorite={toggleCurrentFavorite}
+        onOpenArtist={() => openArtist(artistName(currentTrack))}
+      />
+    {/if}
     {#if showQueuePanel}
       <QueuePanel
         {playbackQueue}
         {currentTrack}
         {playerVisible}
+        raised={nowPlayingOpen}
         onClose={() => showQueuePanel = false}
         onPlayTrack={playTrack}
         onRemove={removeQueuedTrack}

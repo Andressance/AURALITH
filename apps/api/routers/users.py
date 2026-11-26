@@ -24,9 +24,11 @@ from apps.api.models import (
     Favorite,
     HiddenTrack,
     Invitation,
+    ListeningPlay,
     Playlist,
     PlaylistTrack,
     Session as UserSession,
+    StatsDashboard,
     Track,
     User,
 )
@@ -140,6 +142,10 @@ def delete_guest(
         db.query(PlaylistTrack).filter(
             PlaylistTrack.track_id.in_(track_ids)
         ).delete(synchronize_session=False)
+        # Plays of the deleted catalog tracks belong to those tracks, whoever heard them.
+        db.query(ListeningPlay).filter(
+            ListeningPlay.track_id.in_(track_ids)
+        ).delete(synchronize_session=False)
 
     guest_playlists = db.scalars(
         select(Playlist).where(Playlist.user_id == account.id)
@@ -152,6 +158,8 @@ def delete_guest(
     db.query(Favorite).filter(Favorite.user_id == account.id).delete()
     db.query(HiddenTrack).filter(HiddenTrack.user_id == account.id).delete()
     db.query(UserSession).filter(UserSession.user_id == account.id).delete()
+    db.query(ListeningPlay).filter(ListeningPlay.user_id == account.id).delete()
+    db.query(StatsDashboard).filter(StatsDashboard.user_id == account.id).delete()
     db.query(Playlist).filter(Playlist.user_id == account.id).delete()
     db.query(Track).filter(Track.user_id == account.id).delete()
     db.delete(account)

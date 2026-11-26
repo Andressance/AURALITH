@@ -998,3 +998,188 @@ def test_playlist_sharing_is_explicit_and_revocable():
         item["id"] != playlist["id"]
         for item in guest_client.get("/api/playlists").json()
     )
+
+
+def test_listening_stats_and_yearly_wrapped():
+    login()
+    from apps.api.models import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Wrapped Song",
+            artist="Wrapped Artist",
+            album="Wrapped Album",
+            duration=200,
+            sha256="wrapped-stats-test",
+            file_name="wrapped-stats-test.mp3",
+            stored_path="wrapped-stats-test.mp3",
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    assert client.post(
+        "/api/stats/plays", json={"track_id": track_id, "seconds": 180}
+    ).status_code == 200
+    assert client.post(
+        "/api/stats/plays", json={"track_id": track_id, "seconds": 20}
+    ).status_code == 200
+
+    year = datetime.now(timezone.utc).year
+    years = client.get("/api/stats/years")
+    assert years.status_code == 200
+    assert year in years.json()
+
+    wrapped = client.get(f"/api/stats/wrapped?year={year}")
+    assert wrapped.status_code == 200
+    body = wrapped.json()
+    assert body["year"] == year
+    assert body["total_seconds"] >= 200
+    assert body["total_plays"] >= 2
+    assert any(
+        item["id"] == track_id and item["plays"] >= 2 for item in body["top_tracks"]
+    )
+    assert any(
+        artist["name"] == "Wrapped Artist" and artist["seconds"] >= 200
+        for artist in body["top_artists"]
+    )
+    assert any(album["name"] == "Wrapped Album" for album in body["top_albums"])
+    assert len(body["monthly"]) == 12
+    assert body["monthly"][datetime.now(timezone.utc).month - 1]["seconds"] >= 200
+    assert body["busiest_day"] and body["busiest_day"]["seconds"] >= 200
+
+    # A zero-second report is ignored, an unknown track is not recorded, and stats
+    # belong to the signed-in account.
+    assert client.post(
+        "/api/stats/plays", json={"track_id": track_id, "seconds": 0}
+    ).json()["recorded"] is False
+    assert client.post(
+        "/api/stats/plays", json={"track_id": 999999, "seconds": 10}
+    ).status_code == 404
+    anonymous = TestClient(app)
+    assert anonymous.get("/api/stats/wrapped").status_code == 401
+    assert anonymous.post(
+        "/api/stats/plays", json={"track_id": track_id, "seconds": 5}
+    ).status_code == 401
+
+
+def test_stats_overview_breakdowns_and_dashboard_layout():
+    login()
+    from apps.api.models import User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Dashboard Song",
+            artist="Dashboard Artist",
+            album="Dashboard Album",
+            genre="Grunge",
+            duration=260,
+            sha256="dashboard-stats-test",
+            file_name="dashboard-stats-test.mp3",
+            stored_path="dashboard-stats-test.mp3",
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    assert client.post(
+        "/api/stats/plays", json={"track_id": track_id, "seconds": 240}
+    ).status_code == 200
+
+    overview = client.get("/api/stats/overview?period=all")
+    assert overview.status_code == 200
+    body = overview.json()
+    assert body["period"] == "all"
+    assert body["totals"]["seconds"] >= 240
+    assert body["totals"]["unique_tracks"] >= 1
+    assert len(body["hourly"]) == 24
+    assert len(body["weekday"]) == 7
+    assert len(body["monthly"]) == 12
+    assert sum(item["seconds"] for item in body["hourly"]) >= 240
+    assert sum(item["seconds"] for item in body["weekday"]) >= 240
+    assert max(item["seconds"] for item in body["hourly"]) >= 240
+    assert any(
+        artist["name"] == "Dashboard Artist" for artist in body["top_artists"]
+    )
+    assert any(genre["name"] == "Grunge" for genre in body["top_genres"])
+    assert any(album["name"] == "Dashboard Album" for album in body["top_albums"])
+
+    # The layout belongs to the account: defaults, saved edits and a reset.
+    default = client.get("/api/stats/dashboard")
+    assert default.status_code == 200
+    assert len(default.json()["widgets"]) >= 6
+    custom = [
+        {
+            "id": "hours",
+            "title": "Mis horas",
+            "type": "columns",
+            "dimension": "hours",
+            "metric": "plays",
+        },
+        {
+            "id": "genres",
+            "title": "Géneros",
+            "type": "donut",
+            "dimension": "genres",
+            "metric": "minutes",
+        },
+    ]
+    saved = client.put("/api/stats/dashboard", json={"widgets": custom})
+    assert saved.status_code == 200
+    assert [widget["id"] for widget in saved.json()["widgets"]] == ["hours", "genres"]
+    assert len(client.put("/api/stats/dashboard", json={"widgets": custom}).json()["widgets"]) == 2
+    assert client.get("/api/stats/dashboard").json()["widgets"][0]["title"] == "Mis horas"
+
+    invalid = client.put(
+        "/api/stats/dashboard",
+        json={
+            "widgets": [
+                {"id": "x", "type": "bars", "dimension": "bogus", "metric": "minutes"}
+            ]
+        },
+    )
+    assert invalid.status_code == 400
+    too_many = client.put(
+        "/api/stats/dashboard",
+        json={
+            "widgets": [
+                {"id": f"w{index}", "type": "bars", "dimension": "artists", "metric": "minutes"}
+                for index in range(13)
+            ]
+        },
+    )
+    assert too_many.status_code == 400
+    untitled = client.put(
+        "/api/stats/dashboard",
+        json={
+            "widgets": [
+                {"id": "blank", "title": " ", "type": "donut", "dimension": "genres", "metric": "minutes"}
+            ]
+        },
+    )
+    assert untitled.status_code == 200
+    assert untitled.json()["widgets"][0]["title"] == "Géneros más escuchados"
+
+    # Years without plays use the date range and return an empty summary.
+    empty_year = client.get("/api/stats/wrapped?year=1990")
+    assert empty_year.status_code == 200
+    assert empty_year.json()["total_seconds"] == 0
+    assert empty_year.json()["top_artists"] == []
+    monthly = client.get("/api/stats/overview?period=month")
+    assert monthly.status_code == 200
+    assert len(monthly.json()["monthly"]) == 12
+    assert monthly.json()["label"].endswith(str(datetime.now(timezone.utc).year))
+
+    reset = client.post("/api/stats/dashboard/reset")
+    assert reset.status_code == 200
+    assert len(reset.json()["widgets"]) >= 6
+    assert client.get("/api/stats/overview?period=week").status_code == 422
+    anonymous = TestClient(app)
+    assert anonymous.get("/api/stats/dashboard").status_code == 401
+    assert anonymous.get("/api/stats/overview").status_code == 401

@@ -3,6 +3,10 @@
     { "source": "/profile", "destination": "/" },
     { "source": "/playlists", "destination": "/" },
     { "source": "/playlists/:id", "destination": "/" },
+    { "source": "/wrapped", "destination": "/" },
+    { "source": "/stats", "destination": "/" },
+    { "source": "/artist/:path*", "destination": "/" },
+    { "source": "/jam", "destination": "/" },
     { "source": "/invite/:code", "destination": "/" }
   ]
 }

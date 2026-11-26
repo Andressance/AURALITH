@@ -60,6 +60,7 @@ The backend is not coupled to Supabase or to a local installation:
 - Playlists and favorites
 - Playlist sharing with viewer and editor roles
 - Jams: synchronized listening rooms with a shared queue
+- Per-account listening statistics, an editable visual dashboard and a yearly wrapped summary
 - ZIP backup and SQLite restore
 - Docker Compose deployment
 
@@ -1655,6 +1656,7 @@ personal-music-cloud/
 - Repeat.
 - Playlists.
 - Favorites.
+- Listening statistics and a yearly Wrapped.
 - Dashboard.
 - CSV import.
 - Matching.
@@ -1669,7 +1671,6 @@ personal-music-cloud/
 
 - Local friends.
 - Shared playlists.
-- Listening statistics.
 - Advanced dashboard customization.
 - Spotify import, subject to API availability and restrictions.
 - Additional metadata enrichment.
@@ -1683,7 +1684,6 @@ personal-music-cloud/
 - Distributed identity.
 - Social network.
 - Recommendations.
-- Wrapped-style yearly statistics.
 - Native mobile apps.
 - Advanced offline music downloads.
 - Equalizer.

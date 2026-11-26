@@ -26,6 +26,7 @@ from apps.api.routers import (
     jams,
     maintenance,
     playlists,
+    stats,
     tracks,
     users,
 )
@@ -124,4 +125,5 @@ app.include_router(playlists.router)
 app.include_router(jams.router)
 app.include_router(devices.router)
 app.include_router(favorites.router)
+app.include_router(stats.router)
 app.include_router(maintenance.router)

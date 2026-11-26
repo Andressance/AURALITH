@@ -9,6 +9,7 @@
   export let onUpload;
   export let onPlayTrack;
   export let onEnqueue;
+  export let onOpenArtist;
   export let onOpenPlaylistPicker;
   export let onFavorite;
   export let onDelete;
@@ -46,7 +47,7 @@
         <b>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</b>
       </button>
       <strong>{text(track.title, "Canción sin título")}</strong>
-      <span>{text(track.artist, "Artista desconocido")}</span>
+      <button class="track-artist" onclick={() => onOpenArtist(track.artist)} title={`Ver ${text(track.artist, "Artista desconocido")}`}>{text(track.artist, "Artista desconocido")}</button>
       <div class="track-actions">
         <button onclick={() => onEnqueue(track, true)} aria-label="Reproducir después" title="Reproducir después">⏭</button>
         <button onclick={() => onEnqueue(track)} aria-label="Añadir a la cola" title="Añadir a la cola">↗</button>

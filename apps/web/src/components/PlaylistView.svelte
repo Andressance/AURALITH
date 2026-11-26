@@ -4,6 +4,7 @@
   export let selectedPlaylist;
   export let currentTrack;
   export let isPlaying;
+  export let onOpenArtist;
   export let onUploadCover;
   export let onShare;
   export let onToggleLibrary;
@@ -50,7 +51,10 @@
     >
       <span class="track-index">{index + 1}</span>
       <button class="track-play" onclick={() => onPlayTrack(track)}>{currentTrack?.id === track.id && isPlaying ? "Ⅱ" : "▶"}</button>
-      <div><strong>{text(track.title, "Canción sin título")}</strong><span>{text(track.artist, "Artista desconocido")}</span></div>
+      <div>
+        <strong>{text(track.title, "Canción sin título")}</strong>
+        <button class="track-artist" onclick={() => onOpenArtist(track.artist)} title={`Ver ${text(track.artist, "Artista desconocido")}`}>{text(track.artist, "Artista desconocido")}</button>
+      </div>
       <button class="row-action" onclick={() => onEnqueue(track, true)} title="Reproducir después" aria-label="Reproducir después">⏭</button>
       <button class="row-action" onclick={() => onEnqueue(track)} title="Añadir a la cola" aria-label="Añadir a la cola">＋</button>
       {#if selectedPlaylist.role !== "viewer"}
