@@ -4,18 +4,26 @@ Every finished or abandoned playback session is stored as one row, so totals are
 derived instead of keeping counters that could drift. Statistics are per account.
 """
 
+import csv
+import io
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session
 
 from apps.api.deps import current_user, db_session, is_track_hidden
 from apps.api.media import versioned_image_url
-from apps.api.models import ListeningPlay, StatsDashboard, Track, User
+from apps.api.models import (
+    ListeningPlay,
+    StatsDashboard,
+    Track,
+    User,
+    normalize_utc,
+)
 
 router = APIRouter()
 
@@ -318,6 +326,74 @@ def record_play(
     )
     db.commit()
     return {"ok": True, "recorded": True}
+
+
+@router.get("/api/stats/plays/export")
+def export_plays(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+):
+    """Download every listening session of the account as CSV."""
+    rows = db.execute(
+        select(
+            ListeningPlay.played_at,
+            ListeningPlay.seconds,
+            Track.title,
+            Track.artist,
+            Track.album,
+            Track.genre,
+        )
+        .join(Track, Track.id == ListeningPlay.track_id)
+        .where(ListeningPlay.user_id == user.id)
+        .order_by(ListeningPlay.played_at.asc(), ListeningPlay.id.asc())
+    ).all()
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(["fecha", "titulo", "artista", "album", "genero", "segundos"])
+    for row in rows:
+        writer.writerow(
+            [
+                # UTC with an explicit offset, so the file carries its own timezone.
+                normalize_utc(row.played_at).isoformat(),
+                str(row.title or ""),
+                str(row.artist or ""),
+                str(row.album or ""),
+                str(row.genre or ""),
+                int(row.seconds or 0),
+            ]
+        )
+    return Response(
+        # The byte order mark keeps Excel from mangling accents.
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="auralith-historico.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.delete("/api/stats/plays")
+def delete_plays(
+    db: Annotated[Session, Depends(db_session)],
+    user: Annotated[User, Depends(current_user)],
+    days: Annotated[int | None, Query(ge=1, le=3650)] = None,
+    everything: Annotated[bool, Query()] = False,
+):
+    """Delete listening sessions older than ``days``, or the whole history."""
+    if everything and days is not None:
+        raise HTTPException(status_code=400, detail="Use days or everything, not both")
+    if not everything and days is None:
+        raise HTTPException(
+            status_code=400, detail="days is required unless everything=true"
+        )
+    filters = [ListeningPlay.user_id == user.id]
+    if not everything:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        filters.append(ListeningPlay.played_at < cutoff)
+    deleted = db.query(ListeningPlay).filter(*filters).delete(synchronize_session=False)
+    db.commit()
+    return {"ok": True, "deleted": int(deleted or 0)}
 
 
 @router.get("/api/stats/years")

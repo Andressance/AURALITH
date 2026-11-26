@@ -1183,3 +1183,84 @@ def test_stats_overview_breakdowns_and_dashboard_layout():
     anonymous = TestClient(app)
     assert anonymous.get("/api/stats/dashboard").status_code == 401
     assert anonymous.get("/api/stats/overview").status_code == 401
+
+
+def test_listening_history_export_and_retention():
+    login()
+    from apps.api.models import ListeningPlay, User
+
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        track = Track(
+            user_id=owner.id,
+            title="Historial con acentos",
+            artist="Artista Ñandú",
+            album="Álbum de prueba",
+            genre="Folk",
+            duration=210,
+            sha256="history-export-test",
+            file_name="history-export-test.mp3",
+            stored_path="history-export-test.mp3",
+            mime_type="audio/mpeg",
+        )
+        db.add(track)
+        db.commit()
+        track_id = track.id
+
+    for seconds in (120, 60):
+        assert client.post(
+            "/api/stats/plays", json={"track_id": track_id, "seconds": seconds}
+        ).status_code == 200
+
+    # Retention needs an old session; the API only ever writes the current date.
+    with SessionLocal() as db:
+        owner = db.query(User).filter(User.username == "owner").first()
+        db.add(
+            ListeningPlay(
+                user_id=owner.id,
+                track_id=track_id,
+                seconds=45,
+                played_at=datetime(2020, 5, 1, 12, 0, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+
+    exported = client.get("/api/stats/plays/export")
+    assert exported.status_code == 200
+    assert "text/csv" in exported.headers["content-type"]
+    assert 'filename="auralith-historico.csv"' in exported.headers["content-disposition"]
+    assert exported.headers["cache-control"] == "no-store"
+    lines = [line for line in exported.text.lstrip("\ufeff").splitlines() if line]
+    assert lines[0] == "fecha,titulo,artista,album,genero,segundos"
+    assert any(
+        "Historial con acentos" in line and "Artista Ñandú" in line and ",120" in line
+        for line in lines[1:]
+    )
+    # Oldest first, so a spreadsheet reads chronologically.
+    assert lines[1].startswith("2020-05-01")
+
+    # Ambiguous or nonsensical retention requests are rejected before touching rows.
+    assert client.delete("/api/stats/plays").status_code == 400
+    assert client.delete(
+        "/api/stats/plays", params={"days": 30, "everything": "true"}
+    ).status_code == 400
+    assert client.delete("/api/stats/plays", params={"days": 0}).status_code == 422
+
+    trimmed = client.delete("/api/stats/plays", params={"days": 30})
+    assert trimmed.status_code == 200
+    assert trimmed.json()["deleted"] == 1
+    assert "2020-05-01" not in client.get("/api/stats/plays/export").text
+
+    wiped = client.delete("/api/stats/plays", params={"everything": "true"})
+    assert wiped.status_code == 200
+    assert wiped.json()["deleted"] >= 2
+    remaining = client.get("/api/stats/plays/export").text.lstrip("\ufeff").splitlines()
+    assert [line for line in remaining if line] == [
+        "fecha,titulo,artista,album,genero,segundos"
+    ]
+
+    anonymous = TestClient(app)
+    assert anonymous.get("/api/stats/plays/export").status_code == 401
+    assert anonymous.delete(
+        "/api/stats/plays", params={"everything": "true"}
+    ).status_code == 401

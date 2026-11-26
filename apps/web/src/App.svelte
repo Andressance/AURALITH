@@ -163,6 +163,8 @@
   let listenedTrack = null;
   let listenedSeconds = 0;
   let listenedAt = 0;
+  let historyBusy = false;
+  let historyStatus = "";
 
   function navigateView(view) {
     const path = view === "library" ? "/" : `/${view}`;
@@ -979,6 +981,58 @@
     }
   }
 
+  async function exportListeningHistory() {
+    if (historyBusy) return;
+    historyBusy = true;
+    historyStatus = "";
+    try {
+      // Same reason as the backup: a plain link would not carry the session token.
+      const headers = new Headers();
+      if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
+      const response = await fetch(`${API_BASE}/api/stats/plays/export`, {
+        headers,
+        credentials: "include"
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "No se pudo exportar el historial");
+      }
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filename = /filename="?([^";]+)"?/.exec(disposition)?.[1] || "auralith-historico.csv";
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      historyStatus = "Historial exportado.";
+    } catch (cause) {
+      historyStatus = cause.message;
+    } finally {
+      historyBusy = false;
+    }
+  }
+
+  async function deleteListeningHistory(days) {
+    if (historyBusy) return;
+    const scope = days ? `las escuchas de hace más de ${days} días` : "todo el historial de escucha";
+    // Deleting plays rewrites the stats and the wrapped summary, so confirm first.
+    if (!window.confirm(`Se borrarán ${scope}. No se puede deshacer.`)) return;
+    historyBusy = true;
+    historyStatus = "";
+    try {
+      const query = days ? `?days=${encodeURIComponent(days)}` : "?everything=true";
+      const result = await api(`/api/stats/plays${query}`, { method: "DELETE" });
+      const deleted = Number(result?.deleted) || 0;
+      historyStatus = deleted === 1 ? "Se borró 1 escucha." : `Se borraron ${deleted} escuchas.`;
+      if (activeView === "stats") await loadStats(statsPeriod);
+    } catch (cause) {
+      historyStatus = cause.message;
+    } finally {
+      historyBusy = false;
+    }
+  }
+
   async function play(track) {
     if (!track?.stream_url) {
       error = "No se pudo reproducir la canción";
@@ -1636,8 +1690,12 @@
           onNavigate={navigateView}
           onSave={saveProfile}
           onUploadAvatar={uploadProfileAvatar}
+          {historyStatus}
+          {historyBusy}
           onDownloadBackup={downloadBackup}
           onRestoreBackup={restoreBackup}
+          onExportHistory={exportListeningHistory}
+          onDeleteHistory={deleteListeningHistory}
           onLogout={logout}
           onCreateInvitation={createInvitation}
           onCopyInvitation={copyInvitation}

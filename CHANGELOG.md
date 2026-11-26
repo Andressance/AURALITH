@@ -26,6 +26,9 @@ All notable changes to Auralith are documented here. The format follows
   months, artists, songs, albums and genres, by minutes or plays.
 - `GET /api/stats/overview` exposes those breakdowns; the dashboard layout is stored per
   account in `stats_dashboards` and defaults are restored with one click.
+- The listening history can be exported as CSV and trimmed from the profile page: older
+  than 90 days, older than a year, or everything. `GET /api/stats/plays/export` and
+  `DELETE /api/stats/plays` back those buttons.
 
 ### Fixed
 
